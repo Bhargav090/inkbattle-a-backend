@@ -557,6 +557,7 @@ module.exports = function (io) {
     socket.on("submit_guess", async ({ roomCode, roomId, guess }) => {
       try {
         let room;
+        // 1. Find Room
         if (roomCode) {
           room = await Room.findOne({ where: { code: roomCode } });
         } else if (roomId) {
@@ -570,6 +571,7 @@ module.exports = function (io) {
           });
         }
 
+        // 2. Initial Checks (Phase, Word, Authentication)
         if (room.roundPhase !== "drawing") {
           return socket.emit("guess_result", {
             ok: false,
@@ -591,6 +593,7 @@ module.exports = function (io) {
           });
         }
 
+        // 3. Find Participant
         const participant = await RoomParticipant.findOne({
           where: { roomId: room.id, userId: socket.user.id },
         });
@@ -602,6 +605,7 @@ module.exports = function (io) {
           });
         }
 
+        // 4. Drawer cannot guess
         if (participant.isDrawer) {
           return socket.emit("guess_result", {
             ok: false,
@@ -609,6 +613,7 @@ module.exports = function (io) {
           });
         }
 
+        // 5. BLOCK: Only block if the player has already guessed the correct word.
         if (participant.hasGuessedThisRound) {
           return socket.emit("guess_result", {
             ok: false,
@@ -616,7 +621,7 @@ module.exports = function (io) {
           });
         }
 
-        // For team mode, only same team can guess
+        // 6. Team Check (Team vs Team Mode)
         if (room.gameMode === "team_vs_team") {
           const drawer = await RoomParticipant.findOne({
             where: { roomId: room.id, userId: room.currentDrawerId },
@@ -630,17 +635,19 @@ module.exports = function (io) {
           }
         }
 
+        // 7. Process Guess
         const normalized = (guess || "").toString().trim().toLowerCase();
         const word = room.currentWord.toString().trim().toLowerCase();
         const isCorrect = normalized === word;
 
         if (isCorrect) {
+          // --- CORRECT GUESS LOGIC ---
           const reward = calculateGuessReward(
             room.roundRemainingTime,
             room.maxPointsPerRound,
           );
 
-          // Award points
+          // Award points (team or individual)
           if (room.gameMode === "team_vs_team") {
             // Award to entire team
             const teamParticipants = await RoomParticipant.findAll({
@@ -660,10 +667,12 @@ module.exports = function (io) {
             await participant.save();
           }
 
+          // FIX: ONLY MARK as guessed IF the guess was correct.
           participant.hasGuessedThisRound = true;
           await participant.save();
+          // END FIX
 
-          // Reduce time
+          // Reduce time, broadcast, and check for round end (unchanged)
           const activePlayers = await RoomParticipant.count({
             where: { roomId: room.id, isActive: true, isDrawer: false },
           });
@@ -723,9 +732,9 @@ module.exports = function (io) {
             await endDrawingPhase(io, room);
           }
         } else {
-          // Mark as guessed (even if incorrect)
-          participant.hasGuessedThisRound = true;
-          await participant.save();
+          // --- INCORRECT GUESS LOGIC ---
+          // FIX: DO NOT mark hasGuessedThisRound = true here.
+          // The participant remains eligible to guess.
 
           // Get user info for broadcast
           const user = await User.findByPk(socket.user.id);
@@ -746,6 +755,7 @@ module.exports = function (io) {
             message: "incorrect",
             guess: guess,
           });
+          // END FIX
         }
       } catch (e) {
         console.error("Submit guess error:", e);
