@@ -63,22 +63,36 @@ module.exports = function (io) {
           return socket.emit("error", { message: "room_not_found" });
         }
 
-        // Check if room is full
-        const activeParticipants = await RoomParticipant.count({
-          where: { roomId: room.id, isActive: true },
-        });
-
-        if (activeParticipants >= room.maxPlayers) {
-          return socket.emit("error", {
-            message: "room_full",
-            details: `Room is full. Max players: ${room.maxPlayers}`,
+        // --- NEW: Check if the user is a REJOINING participant ---
+        let existingParticipant = null;
+        if (socket.user) {
+          existingParticipant = await RoomParticipant.findOne({
+            where: { roomId: room.id, userId: socket.user.id },
           });
+        }
+
+        const isRejoining =
+          existingParticipant && !existingParticipant.isActive;
+        // -----------------------------------------------------------
+
+        // Only perform the room_full check for NEW players.
+        if (!isRejoining) {
+          const activeParticipants = await RoomParticipant.count({
+            where: { roomId: room.id, isActive: true },
+          });
+
+          if (activeParticipants >= room.maxPlayers) {
+            return socket.emit("error", {
+              message: "room_full",
+              details: `Room is full. Max players: ${room.maxPlayers}`,
+            });
+          }
         }
 
         socket.join(room.code);
         socket.currentRoom = room.code;
 
-        // Reactivate room if it was inactive
+        // Reactivate room if it was inactive (This logic is fine for resume)
         if (room.status === "inactive") {
           await Room.update(
             { status: room.isPublic ? "waiting" : "lobby" },
@@ -90,14 +104,39 @@ module.exports = function (io) {
           );
         }
 
+        let isNewParticipant = false; // Add this flag for clean logging/DB insertion
+
         if (socket.user) {
-          // Update participant with socket info (don't deduct coins here - will be done on game start)
-          await RoomParticipant.update(
-            { socketId: socket.id, isActive: true },
-            { where: { roomId: room.id, userId: socket.user.id } },
-          );
+          if (existingParticipant) {
+            // --- RESUME LOGIC: Update participant status and socket ID ---
+            await RoomParticipant.update(
+              { socketId: socket.id, isActive: true },
+              { where: { roomId: room.id, userId: socket.user.id } },
+            );
+            console.log(
+              `✅ User ${socket.user.name} RESUMED game in room ${room.code}`,
+            );
+          } else {
+            // --- NEW PARTICIPANT LOGIC (You may need to insert a new participant here) ---
+            // Assuming participant creation happens elsewhere (e.g., /api/rooms/join),
+            // but if it happens implicitly here, you would add the creation logic.
+            // For now, we only handle updates for existing users who already joined once.
+
+            // If you are sure a user has an active/inactive record when they hit join_room,
+            // this 'else' branch may not be needed, but it guards against missing records.
+            isNewParticipant = true; // Set flag
+            await RoomParticipant.create({
+              // Example creation for new player
+              roomId: room.id,
+              userId: socket.user.id,
+              socketId: socket.id,
+              isActive: true,
+              // Set default scores, team, etc.
+            });
+          }
         }
 
+        // --- Fetch ALL participants (including the newly resumed/active one) ---
         const participants = await RoomParticipant.findAll({
           where: { roomId: room.id, isActive: true },
           include: [
@@ -119,8 +158,11 @@ module.exports = function (io) {
           isDrawer: p.isDrawer,
           socketId: p.socketId,
           hasPaidEntry: p.hasPaidEntry,
+          // The client uses score/team/isDrawer/etc. to resume the state.
         }));
+        // --------------------------------------------------------------------------
 
+        // --- Emit room_joined to the rejoining client, including isResuming flag ---
         socket.emit("room_joined", {
           room: {
             id: room.id,
@@ -139,30 +181,90 @@ module.exports = function (io) {
             targetPoints: room.targetPoints,
             isPublic: room.isPublic,
             ownerId: room.ownerId,
+            // The resume feature relies on the client receiving these:
             roundPhase: room.roundPhase,
             roundRemainingTime: room.roundRemainingTime,
+            // The entire room object serves as the Game State for the client.
           },
           participants: participantList,
+          isResuming: isRejoining, // <--- NEW: Flag for the client
         });
+        // --------------------------------------------------------------------------
 
+        // Broadcast updated participant list to ALL room members
         io.to(room.code).emit("room_participants", {
           participants: participantList,
         });
 
+        // Notify others that a player joined/rejoined
         socket.to(room.code).emit("player_joined", {
           userName: socket.user ? socket.user.name : "Guest",
           userId: socket.user ? socket.user.id : null,
+          isRejoining: isRejoining, // <--- NEW: Notify others
         });
 
-        console.log(
-          `👤 User ${socket.user ? socket.user.name : "Guest"} joined room ${room.code}`,
-        );
+        // Log for clarity
+        if (!isRejoining && !isNewParticipant) {
+          console.log(
+            `👤 User ${socket.user ? socket.user.name : "Guest"} joined room ${room.code}`,
+          );
+        }
+
+        // NOTE: You may also need to emit the full **drawing history** if the game is 'playing'
+        // This is often stored in a separate temporary cache (e.g., Redis) indexed by room ID.
+        if (room.status === "playing") {
+          const currentDrawerId = room.currentDrawerId;
+          const resumingSocketId = socket.id;
+          // Find the active drawer's socket ID
+          const drawerParticipant = participantList.find(
+            (p) => p.id === currentDrawerId,
+          );
+          if (drawerParticipant && drawerParticipant.socketId) {
+            const drawerSocketId = drawerParticipant.socketId;
+
+            // 2. Emit a specific event to the Drawer's socket, requesting the drawing data
+            io.to(drawerSocketId).emit("request_canvas_data", {
+              roomCode: room.code,
+              targetSocketId: resumingSocketId, // Tell the drawer where to send the data
+            });
+
+            console.log(
+              `📡 Requested canvas data from drawer ${drawerParticipant.name} for resuming user ${socket.user?.name}`,
+            );
+          } else {
+            console.warn(
+              `⚠️ Room ${room.code} is playing, but drawer socket not found.`,
+            );
+            // You may need to handle a scenario where the drawer disconnected mid-round.
+          }
+        }
       } catch (e) {
         console.error("Join room error:", e);
         socket.emit("error", { message: "join_room_failed" });
       }
     });
+    // Resume Feature
+    socket.on(
+      "send_canvas_data",
+      async ({ roomCode, targetSocketId, history, remainingTime }) => {
+        console.log("Received canvas data:", history);
+        // 1. Check if the room is valid (optional but good security)
+        const room = await Room.findOne({ where: { code: roomCode } });
+        if (!room) return socket.emit("error", { message: "room_not_found" });
 
+        // 2. Directly emit the data to the single target socket ID
+        io.to(targetSocketId).emit("canvas_resume", {
+          roomCode: roomCode,
+          history: history,
+          room: room,
+          remainingTime: remainingTime,
+        });
+
+        console.log(
+          `➡️ Forwarded canvas data to resuming user: ${targetSocketId}`,
+        );
+      },
+    );
     // UPDATE SETTINGS (Owner only, lobby only)
     socket.on("update_settings", async ({ roomId, settings }) => {
       try {
