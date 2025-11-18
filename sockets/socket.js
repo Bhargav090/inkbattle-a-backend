@@ -265,23 +265,85 @@ module.exports = function (io) {
         );
       },
     );
-    // UPDATE SETTINGS (Owner only, lobby only)
+
     socket.on("update_settings", async ({ roomId, settings }) => {
+      const VOICE_CHAT_COST = 50;
+
       try {
         const room = await Room.findByPk(roomId);
         if (!room) return socket.emit("error", { message: "room_not_found" });
 
+        // Basic authorization checks
         if (room.ownerId !== socket.user?.id) {
           return socket.emit("error", { message: "only_owner_can_update" });
         }
 
-        // Allow updates in lobby and waiting status (before game starts)
         if (room.status !== "lobby" && room.status !== "waiting") {
           return socket.emit("error", {
             message: "cannot_update_after_game_started",
           });
         }
 
+        // --- VOICE CHAT FEE LOGIC ---
+        if (
+          settings.voiceEnabled !== undefined &&
+          settings.voiceEnabled === true &&
+          room.voiceEnabled === false
+        ) {
+          // 1. Fetch all active participants and their User models
+          const participants = await RoomParticipant.findAll({
+            where: { roomId: room.id, isActive: true },
+            include: [{ model: User, as: "user" }],
+          });
+
+          const insufficientFundsUsers = [];
+          const usersToCharge = [];
+
+          // 2. Check Balances for all users
+          for (const participant of participants) {
+            if (!participant.user) continue;
+
+            if (participant.user.coins < VOICE_CHAT_COST) {
+              insufficientFundsUsers.push(participant.user.name);
+            } else {
+              usersToCharge.push(participant.user);
+            }
+          }
+
+          // 3. Handle Insufficient Funds (Block and Notify All)
+          if (insufficientFundsUsers.length > 0) {
+            const names = insufficientFundsUsers.join(", ");
+            const errorMessage = `Voice chat requires ${VOICE_CHAT_COST} coins from everyone. Users lacking funds: ${names}.`;
+
+            // Broadcast error to everyone in the room (not just the owner)
+            io.to(room.code).emit("error", {
+              message: "insufficient_coins",
+              details: errorMessage,
+              usersAffected: insufficientFundsUsers,
+            });
+
+            // Do NOT update room.voiceEnabled and return
+            return;
+          }
+
+          // 4. Charge Users and Update Database (Transaction Recommended, but simplified here)
+          const chargePromises = usersToCharge.map((user) => {
+            user.coins -= VOICE_CHAT_COST;
+            return user.save();
+          });
+          await Promise.all(chargePromises);
+
+          room.voiceEnabled = settings.voiceEnabled;
+
+          io.to(room.code).emit("error", {
+            message: `Voice chat enabled! ${VOICE_CHAT_COST} coins charged from all active participants.`,
+          });
+        } else if (
+          settings.voiceEnabled !== undefined &&
+          settings.voiceEnabled === false
+        ) {
+          room.voiceEnabled = settings.voiceEnabled;
+        }
         if (settings.gameMode !== undefined) room.gameMode = settings.gameMode;
         if (settings.language !== undefined) room.language = settings.language;
         if (settings.script !== undefined) room.script = settings.script;
@@ -293,19 +355,19 @@ module.exports = function (io) {
           });
           room.themeId = theme ? theme.id : null;
         }
-        if (settings.entryPoints !== undefined)
-          room.entryPoints = settings.entryPoints;
+        if (settings.entryPoints !== undefined) {
+          if (settings.voiceEnabled === true)
+            room.entryPoints = settings.entryPoints + VOICE_CHAT_COST;
+          else room.entryPoints = settings.entryPoints;
+        }
         if (settings.targetPoints !== undefined)
           room.targetPoints = settings.targetPoints;
-        if (settings.voiceEnabled !== undefined)
-          room.voiceEnabled = settings.voiceEnabled;
+
         if (settings.isPublic !== undefined) {
           room.isPublic = settings.isPublic;
-          // When room becomes public, change status from 'lobby' to 'waiting' so it's discoverable
           if (settings.isPublic === true && room.status === "lobby") {
             room.status = "waiting";
           }
-          // When room becomes private, change status back to 'lobby'
           if (settings.isPublic === false && room.status === "waiting") {
             room.status = "lobby";
           }
@@ -329,7 +391,7 @@ module.exports = function (io) {
           status: room.status,
         });
 
-        console.log(`⚙️  Room ${room.id} settings updated`);
+        console.log(`⚙️ Room ${room.id} settings updated`);
       } catch (e) {
         console.error("Update settings error:", e);
         socket.emit("error", { message: "update_settings_failed" });
@@ -613,7 +675,8 @@ module.exports = function (io) {
     });
 
     // CHAT MESSAGE
-    socket.on("chat_message", async ({ roomCode, roomId, content }) => {
+    socket.on("chat_message", async ({ roomCode, roomId, content, avatar }) => {
+      console.log(avatar);
       try {
         let room;
         if (roomCode) {
@@ -631,7 +694,7 @@ module.exports = function (io) {
           type: "text",
         });
 
-        let user = { id: null, name: "Guest", avatar: null };
+        let user = { id: null, name: "Guest", avatar: avatar };
         if (userId) {
           const dbUser = await User.findByPk(userId);
           if (dbUser) {
@@ -800,6 +863,7 @@ module.exports = function (io) {
               name: socket.user.name,
               score: participant.score,
               team: participant.team,
+              avatar: participant.avatar,
             },
             remainingTime: room.roundRemainingTime,
           });
@@ -856,6 +920,7 @@ module.exports = function (io) {
             ok: false,
             message: "incorrect",
             guess: guess,
+            avatar: user.avatar,
           });
           // END FIX
         }
