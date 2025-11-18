@@ -5,7 +5,7 @@ const { sign, authMiddleware } = require('../utils/auth');
 
 
 const coinsForRegisteredUsers = 200;
-const coinsForGuestUsers = 20;
+const coinsForGuestUsers = 1000;
 
 // Simple provider-based signup/login.
 // Frontend should send: { provider: 'google'|'facebook', providerId: '...', name, email, avatar }

@@ -230,6 +230,7 @@ router.post('/join', async (req, res) => {
 
     // Check if user has enough coins
     const user = await User.findByPk(req.user.id);
+    
     if (!user || user.coins < room.entryPoints) {
       return res.status(400).json({ 
         error: 'insufficient_coins',
