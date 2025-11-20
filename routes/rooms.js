@@ -1,7 +1,14 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const { Room, RoomParticipant, User, Theme, Word, sequelize } = require('../models');
-const { Op } = require('sequelize');
+const {
+  Room,
+  RoomParticipant,
+  User,
+  Theme,
+  Word,
+  sequelize,
+} = require("../models");
+const { Op } = require("sequelize");
 
 // Generate unique room code
 function generateRoomCode() {
@@ -10,18 +17,18 @@ function generateRoomCode() {
 
 // Assign team randomly for team_vs_team mode
 function assignTeamRandomly(existingParticipants) {
-  const teamACount = existingParticipants.filter(p => p.team === 'A').length;
-  const teamBCount = existingParticipants.filter(p => p.team === 'B').length;
-  return teamACount <= teamBCount ? 'A' : 'B';
+  const teamACount = existingParticipants.filter((p) => p.team === "A").length;
+  const teamBCount = existingParticipants.filter((p) => p.team === "B").length;
+  return teamACount <= teamBCount ? "A" : "B";
 }
 
 // CREATE ROOM (Simplified - only name required, settings in lobby) - Protected by global middleware
-router.post('/create', async (req, res) => {
+router.post("/create", async (req, res) => {
   try {
     const { name } = req.body;
 
     if (!name || name.trim().length === 0) {
-      return res.status(400).json({ error: 'room_name_required' });
+      return res.status(400).json({ error: "room_name_required" });
     }
 
     const code = generateRoomCode();
@@ -30,23 +37,25 @@ router.post('/create', async (req, res) => {
       name: name.trim(),
       code,
       ownerId: req.user.id,
-      gameMode: '1v1', // Default to 1v1
-      status: 'lobby', // Start in lobby
+      gameMode: "1v1", // Default to 1v1
+      status: "lobby", // Start in lobby
       isPublic: false, // Default to private
       voiceEnabled: false, // Default voice off
       entryPoints: 100, // Default entry
       targetPoints: 100, // Default target
-      maxPlayers: 15
+      maxPlayers: 15,
     });
 
-    console.log(`🏠 Room created: ${room.id} (${room.name}) by ${req.user.name} - Code: ${room.code}`);
+    console.log(
+      `🏠 Room created: ${room.id} (${room.name}) by ${req.user.name} - Code: ${room.code}`,
+    );
 
     // Owner joins automatically (no entry fee yet)
     await RoomParticipant.create({
       roomId: room.id,
       userId: req.user.id,
       isDrawer: false,
-      hasPaidEntry: false // Will pay when game starts
+      hasPaidEntry: false, // Will pay when game starts
     });
 
     res.json({
@@ -63,32 +72,34 @@ router.post('/create', async (req, res) => {
         targetPoints: room.targetPoints,
         maxPlayers: room.maxPlayers,
         participantCount: 1,
-        ownerId: room.ownerId
-      }
+        ownerId: room.ownerId,
+      },
     });
   } catch (err) {
-    console.error('Create room error:', err);
-    res.status(500).json({ error: 'server_error', message: err.message });
+    console.error("Create room error:", err);
+    res.status(500).json({ error: "server_error", message: err.message });
   }
 });
 
 // UPDATE LOBBY SETTINGS (Only owner can update) - Protected by global middleware
-router.post('/:roomId/update-settings', async (req, res) => {
+router.post("/:roomId/update-settings", async (req, res) => {
   try {
     const room = await Room.findByPk(req.params.roomId);
-    
+
     if (!room) {
-      return res.status(404).json({ error: 'room_not_found' });
+      return res.status(404).json({ error: "room_not_found" });
     }
 
     // Only owner can update settings
     if (room.ownerId !== req.user.id) {
-      return res.status(403).json({ error: 'only_owner_can_update' });
+      return res.status(403).json({ error: "only_owner_can_update" });
     }
 
     // Can only update in lobby or waiting (before game starts)
-    if (room.status !== 'lobby' && room.status !== 'waiting') {
-      return res.status(400).json({ error: 'cannot_update_after_game_started' });
+    if (room.status !== "lobby" && room.status !== "waiting") {
+      return res
+        .status(400)
+        .json({ error: "cannot_update_after_game_started" });
     }
 
     const {
@@ -101,7 +112,7 @@ router.post('/:roomId/update-settings', async (req, res) => {
       targetPoints,
       voiceEnabled,
       isPublic,
-      maxPlayers
+      maxPlayers,
     } = req.body;
 
     // Update room settings
@@ -144,105 +155,109 @@ router.post('/:roomId/update-settings', async (req, res) => {
         voiceEnabled: room.voiceEnabled,
         isPublic: room.isPublic,
         maxPlayers: room.maxPlayers,
-        status: room.status
-      }
+        status: room.status,
+      },
     });
   } catch (err) {
-    console.error('Update settings error:', err);
-    res.status(500).json({ error: 'server_error', message: err.message });
+    console.error("Update settings error:", err);
+    res.status(500).json({ error: "server_error", message: err.message });
   }
 });
 
 // UPDATE TEAM SELECTION (For team_vs_team mode) - Protected by global middleware
-router.post('/:roomId/select-team', async (req, res) => {
+router.post("/:roomId/select-team", async (req, res) => {
   try {
     const { team } = req.body; // 'orange' or 'blue'
-    
-    if (!team || (team !== 'orange' && team !== 'blue')) {
-      return res.status(400).json({ error: 'invalid_team' });
+
+    if (!team || (team !== "orange" && team !== "blue")) {
+      return res.status(400).json({ error: "invalid_team" });
     }
 
     const room = await Room.findByPk(req.params.roomId);
-    
+
     if (!room) {
-      return res.status(404).json({ error: 'room_not_found' });
+      return res.status(404).json({ error: "room_not_found" });
     }
 
     // Can only change team in lobby or waiting (before game starts)
-    if (room.status !== 'lobby' && room.status !== 'waiting') {
-      return res.status(400).json({ error: 'cannot_change_team_after_game_started' });
+    if (room.status !== "lobby" && room.status !== "waiting") {
+      return res
+        .status(400)
+        .json({ error: "cannot_change_team_after_game_started" });
     }
 
-    if (room.gameMode !== 'team' && room.gameMode !== 'team_vs_team') {
-      return res.status(400).json({ error: 'not_team_mode' });
+    if (room.gameMode !== "team" && room.gameMode !== "team_vs_team") {
+      return res.status(400).json({ error: "not_team_mode" });
     }
 
     const participant = await RoomParticipant.findOne({
-      where: { roomId: room.id, userId: req.user.id }
+      where: { roomId: room.id, userId: req.user.id },
     });
 
     if (!participant) {
-      return res.status(404).json({ error: 'not_in_room' });
+      return res.status(404).json({ error: "not_in_room" });
     }
 
     participant.team = team;
     await participant.save();
 
-    console.log(`👥 User ${req.user.name} selected team ${team} in room ${room.id}`);
+    console.log(
+      `👥 User ${req.user.name} selected team ${team} in room ${room.id}`,
+    );
 
     res.json({
       success: true,
       participant: {
         id: participant.id,
         userId: participant.userId,
-        team: participant.team
-      }
+        team: participant.team,
+      },
     });
   } catch (err) {
-    console.error('Select team error:', err);
-    res.status(500).json({ error: 'server_error', message: err.message });
+    console.error("Select team error:", err);
+    res.status(500).json({ error: "server_error", message: err.message });
   }
 });
 
 // JOIN ROOM BY CODE - Protected by global middleware
-router.post('/join', async (req, res) => {
+router.post("/join", async (req, res) => {
   try {
     const { code, team } = req.body;
-    
+
     if (!code) {
-      return res.status(400).json({ error: 'code_required' });
+      return res.status(400).json({ error: "code_required" });
     }
 
     const room = await Room.findOne({ where: { code } });
-    
+
     if (!room) {
-      return res.status(404).json({ error: 'room_not_found' });
+      return res.status(404).json({ error: "room_not_found" });
     }
 
     // Check if room is full
     const participantCount = await RoomParticipant.count({
-      where: { roomId: room.id, isActive: true }
+      where: { roomId: room.id, isActive: true },
     });
 
     if (participantCount >= room.maxPlayers) {
-      return res.status(400).json({ error: 'room_full' });
+      return res.status(400).json({ error: "room_full" });
     }
 
     // Check if user has enough coins
     const user = await User.findByPk(req.user.id);
-    
+
     if (!user || user.coins < room.entryPoints) {
-      return res.status(400).json({ 
-        error: 'insufficient_coins',
+      return res.status(400).json({
+        error: "insufficient_coins",
         message: `You need ${room.entryPoints} coins to join this room`,
         required: room.entryPoints,
-        current: user ? user.coins : 0
+        current: user ? user.coins : 0,
       });
     }
 
     // Check if user already in room
     let participant = await RoomParticipant.findOne({
-      where: { roomId: room.id, userId: req.user.id }
+      where: { roomId: room.id, userId: req.user.id },
     });
 
     if (participant) {
@@ -254,17 +269,19 @@ router.post('/join', async (req, res) => {
       // Deduct coins from user
       user.coins -= room.entryPoints;
       await user.save();
-      console.log(`💰 Deducted ${room.entryPoints} coins from user ${req.user.id}. Remaining: ${user.coins}`);
+      console.log(
+        `💰 Deducted ${room.entryPoints} coins from user ${req.user.id}. Remaining: ${user.coins}`,
+      );
 
       // Assign team if team mode (gameMode: 'team' or 'team_vs_team')
       let assignedTeam = null;
-      if (room.gameMode === 'team' || room.gameMode === 'team_vs_team') {
-        if (team && (team === 'orange' || team === 'blue')) {
+      if (room.gameMode === "team" || room.gameMode === "team_vs_team") {
+        if (team && (team === "orange" || team === "blue")) {
           assignedTeam = team;
         } else {
           // Auto-assign to balance teams
           const participants = await RoomParticipant.findAll({
-            where: { roomId: room.id, isActive: true }
+            where: { roomId: room.id, isActive: true },
           });
           assignedTeam = assignTeamRandomly(participants);
         }
@@ -275,13 +292,13 @@ router.post('/join', async (req, res) => {
         userId: req.user.id,
         team: assignedTeam,
         isDrawer: false,
-        hasPaidEntry: true
+        hasPaidEntry: true,
       });
     }
 
     // Get updated participant count after join
     const updatedParticipantCount = await RoomParticipant.count({
-      where: { roomId: room.id, isActive: true }
+      where: { roomId: room.id, isActive: true },
     });
 
     res.json({
@@ -296,73 +313,93 @@ router.post('/join', async (req, res) => {
         voiceEnabled: room.voiceEnabled,
         status: room.status,
         maxPlayers: room.maxPlayers,
-        participantCount: updatedParticipantCount
+        participantCount: updatedParticipantCount,
       },
       participant: {
         id: participant.id,
         team: participant.team,
-        score: participant.score
-      }
+        score: participant.score,
+      },
     });
   } catch (err) {
-    console.error('Join room error:', err);
-    res.status(500).json({ error: 'server_error', message: err.message });
+    console.error("Join room error:", err);
+    res.status(500).json({ error: "server_error", message: err.message });
   }
 });
 
 // PLAY RANDOM - Find and join a matching public room (no room creation) - Protected by global middleware
-router.post('/play-random', async (req, res) => {
+router.post("/play-random", async (req, res) => {
   try {
-    const { language, category, country, voiceEnabled, targetPoints } = req.body;
+    const { language, category, country, voiceEnabled, targetPoints } =
+      req.body;
 
-    console.log(`🎲 Play Random request from user ${req.user.id}: ${language}, ${category}, ${country}, voice: ${voiceEnabled}, targetPoints: ${targetPoints}`);
+    console.log(
+      `🎲 Play Random request from user ${req.user.id}: ${language}, ${category}, ${country}, voice: ${voiceEnabled}, targetPoints: ${targetPoints}`,
+    );
 
-    if (!language || !category || !country || voiceEnabled === undefined || !targetPoints) {
-      return res.status(400).json({ 
-        error: 'missing_parameters',
-        message: 'language, category, country, voiceEnabled, and targetPoints are required'
+    if (
+      !language ||
+      !category ||
+      !country ||
+      voiceEnabled === undefined ||
+      !targetPoints
+    ) {
+      return res.status(400).json({
+        error: "missing_parameters",
+        message:
+          "language, category, country, voiceEnabled, and targetPoints are required",
       });
     }
 
     // Build exact match criteria for public 1v1 rooms only
     const where = {
       isPublic: true,
-      status: { [Op.in]: ['lobby', 'waiting'] }, // Match both lobby and waiting status
-      gameMode: '1v1', // Only match 1v1 rooms for play random
+      status: { [Op.in]: ["lobby", "waiting"] }, // Match both lobby and waiting status
+      gameMode: "1v1", // Only match 1v1 rooms for play random
       language: language,
       category: category,
       country: country,
       voiceEnabled: voiceEnabled,
-      targetPoints: parseInt(targetPoints) // Match target points
+      targetPoints: parseInt(targetPoints), // Match target points
     };
 
     // Find matching public rooms with available slots
     const rooms = await Room.findAll({
       where,
-      include: [{
-        model: RoomParticipant,
-        as: 'participants',
-        where: { isActive: true },
-        required: false
-      }]
+      include: [
+        {
+          model: RoomParticipant,
+          as: "participants",
+          where: { isActive: true },
+          required: false,
+        },
+      ],
     });
 
-    console.log(`🔍 Play Random: Found ${rooms.length} matching rooms for user ${req.user.id}`);
+    console.log(
+      `🔍 Play Random: Found ${rooms.length} matching rooms for user ${req.user.id}`,
+    );
 
     // Filter rooms that aren't full and user isn't already active in them
     const availableRooms = [];
     for (const room of rooms) {
       const participantCount = room.participants ? room.participants.length : 0;
       const isRoomFull = participantCount >= room.maxPlayers;
-      
+
       // Check if user is already ACTIVE in this room (only active participants matter)
-      const userActiveInRoom = room.participants && room.participants.some(p => p.userId === req.user.id && p.isActive);
-      
+      const userActiveInRoom =
+        room.participants &&
+        room.participants.some((p) => p.userId === req.user.id && p.isActive);
+
       if (!isRoomFull && !userActiveInRoom) {
         availableRooms.push(room);
-        console.log(`✅ Available room found: ${room.id} (${room.name}) - ${participantCount}/${room.maxPlayers} players`);
+        console.log(
+          `✅ Available room found: ${room.id} (${room.name}) - ${participantCount}/${room.maxPlayers} players`,
+        );
       } else {
-        console.log(`❌ Room ${room.id} not available - Full: ${isRoomFull}, UserActiveInRoom: ${userActiveInRoom}`);
+        console.log(
+          `❌ Room ${room.id} not available - Full: ${isRoomFull}, UserActiveInRoom: ${userActiveInRoom}`,
+        );
       }
     }
 
@@ -372,8 +409,8 @@ router.post('/play-random', async (req, res) => {
       return res.json({
         success: false,
         matched: false,
-        message: 'no_matches_found',
-        suggestion: 'Try with different preferences or create a new room'
+        message: "no_matches_found",
+        suggestion: "Try with different preferences or create a new room",
       });
     }
 
@@ -386,30 +423,40 @@ router.post('/play-random', async (req, res) => {
 
     // Join the room with the most players (best match)
     const room = availableRooms[0];
-    const roomParticipantCount = room.participants ? room.participants.length : 0;
-    console.log(`🎯 Selected room ${room.id} (${room.name}) with ${roomParticipantCount} existing players`);
-    
-    console.log(`🎮 User ${req.user.id} joining room ${room.id} (${room.name})`);
-    
+    const roomParticipantCount = room.participants
+      ? room.participants.length
+      : 0;
+    console.log(
+      `🎯 Selected room ${room.id} (${room.name}) with ${roomParticipantCount} existing players`,
+    );
+
+    console.log(
+      `🎮 User ${req.user.id} joining room ${room.id} (${room.name})`,
+    );
+
     // Check if user has enough coins
     const user = await User.findByPk(req.user.id);
-    console.log(`💰 Coin check for play-random: User ${user.name} has ${user.coins} coins, room requires ${room.entryPoints} coins`);
-    
+    console.log(
+      `💰 Coin check for play-random: User ${user.name} has ${user.coins} coins, room requires ${room.entryPoints} coins`,
+    );
+
     if (!user || user.coins < room.entryPoints) {
-      console.log(`❌ Insufficient coins for play-random: ${user.coins} < ${room.entryPoints}`);
-      return res.status(400).json({ 
-        error: 'insufficient_coins',
+      console.log(
+        `❌ Insufficient coins for play-random: ${user.coins} < ${room.entryPoints}`,
+      );
+      return res.status(400).json({
+        error: "insufficient_coins",
         message: `You need ${room.entryPoints} coins to join this room`,
         required: room.entryPoints,
-        current: user ? user.coins : 0
+        current: user ? user.coins : 0,
       });
     }
-    
+
     console.log(`✅ User has enough coins to join via play-random`);
 
     // Check if user already has a participant record and reactivate it, or create new one
     let participant = await RoomParticipant.findOne({
-      where: { roomId: room.id, userId: req.user.id }
+      where: { roomId: room.id, userId: req.user.id },
     });
 
     if (participant) {
@@ -417,26 +464,32 @@ router.post('/play-random', async (req, res) => {
       participant.isActive = true;
       participant.hasPaidEntry = true;
       await participant.save();
-      console.log(`🔄 Reactivated existing participant for user ${req.user.id} in room ${room.id}`);
+      console.log(
+        `🔄 Reactivated existing participant for user ${req.user.id} in room ${room.id}`,
+      );
     } else {
       // Deduct coins from user
       user.coins -= room.entryPoints;
       await user.save();
-      console.log(`💰 Deducted ${room.entryPoints} coins from user ${req.user.id}. Remaining: ${user.coins}`);
+      console.log(
+        `💰 Deducted ${room.entryPoints} coins from user ${req.user.id}. Remaining: ${user.coins}`,
+      );
 
       // Create new participant entry
       participant = await RoomParticipant.create({
         roomId: room.id,
         userId: req.user.id,
         isDrawer: false,
-        hasPaidEntry: true
+        hasPaidEntry: true,
       });
-      console.log(`✨ Created new participant for user ${req.user.id} in room ${room.id}`);
+      console.log(
+        `✨ Created new participant for user ${req.user.id} in room ${room.id}`,
+      );
     }
 
     // Get updated participant count
     const participantCount = await RoomParticipant.count({
-      where: { roomId: room.id, isActive: true }
+      where: { roomId: room.id, isActive: true },
     });
 
     res.json({
@@ -451,57 +504,57 @@ router.post('/play-random', async (req, res) => {
         voiceEnabled: room.voiceEnabled,
         status: room.status,
         maxPlayers: room.maxPlayers,
-        participantCount
+        participantCount,
       },
       participant: {
         id: participant.id,
-        score: participant.score
-      }
+        score: participant.score,
+      },
     });
   } catch (err) {
-    console.error('Play random error:', err);
-    res.status(500).json({ error: 'server_error', message: err.message });
+    console.error("Play random error:", err);
+    res.status(500).json({ error: "server_error", message: err.message });
   }
 });
 
 // JOIN ROOM BY ID (for public rooms) - Protected by global middleware
-router.post('/join-by-id', async (req, res) => {
+router.post("/join-by-id", async (req, res) => {
   try {
     const { roomId, team } = req.body;
-    
+
     if (!roomId) {
-      return res.status(400).json({ error: 'room_id_required' });
+      return res.status(400).json({ error: "room_id_required" });
     }
 
     const room = await Room.findByPk(roomId);
-    
+
     if (!room) {
-      return res.status(404).json({ error: 'room_not_found' });
+      return res.status(404).json({ error: "room_not_found" });
     }
 
     // Check if room is full
     const participantCount = await RoomParticipant.count({
-      where: { roomId: room.id, isActive: true }
+      where: { roomId: room.id, isActive: true },
     });
 
     if (participantCount >= room.maxPlayers) {
-      return res.status(400).json({ error: 'room_full' });
+      return res.status(400).json({ error: "room_full" });
     }
 
     // Check if user has enough coins
     const user = await User.findByPk(req.user.id);
     if (!user || user.coins < room.entryPoints) {
-      return res.status(400).json({ 
-        error: 'insufficient_coins',
+      return res.status(400).json({
+        error: "insufficient_coins",
         message: `You need ${room.entryPoints} coins to join this room`,
         required: room.entryPoints,
-        current: user ? user.coins : 0
+        current: user ? user.coins : 0,
       });
     }
 
     // Check if user already in room
     let participant = await RoomParticipant.findOne({
-      where: { roomId: room.id, userId: req.user.id }
+      where: { roomId: room.id, userId: req.user.id },
     });
 
     if (participant) {
@@ -513,17 +566,19 @@ router.post('/join-by-id', async (req, res) => {
       // Deduct coins from user
       user.coins -= room.entryPoints;
       await user.save();
-      console.log(`💰 Deducted ${room.entryPoints} coins from user ${req.user.id}. Remaining: ${user.coins}`);
+      console.log(
+        `💰 Deducted ${room.entryPoints} coins from user ${req.user.id}. Remaining: ${user.coins}`,
+      );
 
       // Assign team if team mode (gameMode: 'team' or 'team_vs_team')
       let assignedTeam = null;
-      if (room.gameMode === 'team' || room.gameMode === 'team_vs_team') {
-        if (team && (team === 'orange' || team === 'blue')) {
+      if (room.gameMode === "team" || room.gameMode === "team_vs_team") {
+        if (team && (team === "orange" || team === "blue")) {
           assignedTeam = team;
         } else {
           // Auto-assign to balance teams
           const participants = await RoomParticipant.findAll({
-            where: { roomId: room.id, isActive: true }
+            where: { roomId: room.id, isActive: true },
           });
           assignedTeam = assignTeamRandomly(participants);
         }
@@ -534,13 +589,13 @@ router.post('/join-by-id', async (req, res) => {
         userId: req.user.id,
         team: assignedTeam,
         isDrawer: false,
-        hasPaidEntry: true
+        hasPaidEntry: true,
       });
     }
 
     // Get updated participant count after join
     const updatedParticipantCount = await RoomParticipant.count({
-      where: { roomId: room.id, isActive: true }
+      where: { roomId: room.id, isActive: true },
     });
 
     res.json({
@@ -555,39 +610,33 @@ router.post('/join-by-id', async (req, res) => {
         voiceEnabled: room.voiceEnabled,
         status: room.status,
         maxPlayers: room.maxPlayers,
-        participantCount: updatedParticipantCount
+        participantCount: updatedParticipantCount,
       },
       participant: {
         id: participant.id,
         team: participant.team,
-        score: participant.score
-      }
+        score: participant.score,
+      },
     });
   } catch (err) {
-    console.error('Join room by ID error:', err);
-    res.status(500).json({ error: 'server_error', message: err.message });
+    console.error("Join room by ID error:", err);
+    res.status(500).json({ error: "server_error", message: err.message });
   }
 });
 
 // CREATE PUBLIC ROOM (for when no random matches found) - Protected by global middleware
-router.post('/create-public', async (req, res) => {
+router.post("/create-public", async (req, res) => {
   try {
-    const {
-      language,
-      category,
-      country,
-      voiceEnabled,
-      name
-    } = req.body;
+    const { language, category, country, voiceEnabled, name } = req.body;
 
     // Validate required parameters
     if (!language || !category || !country || voiceEnabled === undefined) {
-      return res.status(400).json({ 
-        error: 'missing_parameters',
-        message: 'language, category, country, and voiceEnabled are required'
+      return res.status(400).json({
+        error: "missing_parameters",
+        message: "language, category, country, and voiceEnabled are required",
       });
     }
-    
+
     // Find theme by category
     let themeId = null;
     if (category) {
@@ -602,7 +651,7 @@ router.post('/create-public', async (req, res) => {
       name: name || `${category} Room`,
       code,
       ownerId: req.user.id,
-      roomType: 'multiplayer',
+      roomType: "multiplayer",
       language,
       country,
       category,
@@ -610,14 +659,14 @@ router.post('/create-public', async (req, res) => {
       isPublic: true,
       maxPlayers: 15,
       themeId,
-      status: 'waiting'
+      status: "waiting",
     });
 
     // Owner joins automatically
     await RoomParticipant.create({
       roomId: room.id,
       userId: req.user.id,
-      isDrawer: false
+      isDrawer: false,
     });
 
     res.json({
@@ -634,17 +683,17 @@ router.post('/create-public', async (req, res) => {
         isPublic: room.isPublic,
         maxPlayers: room.maxPlayers,
         status: room.status,
-        participantCount: 1
-      }
+        participantCount: 1,
+      },
     });
   } catch (err) {
-    console.error('Create public room error:', err);
-    res.status(500).json({ error: 'server_error', message: err.message });
+    console.error("Create public room error:", err);
+    res.status(500).json({ error: "server_error", message: err.message });
   }
 });
 
 // CREATE TEAM VS TEAM ROOM - Protected by global middleware
-router.post('/create-team', async (req, res) => {
+router.post("/create-team", async (req, res) => {
   try {
     const {
       name,
@@ -656,11 +705,11 @@ router.post('/create-team', async (req, res) => {
       gamePlay,
       voiceEnabled,
       isPublic,
-      team // User's chosen team (A or B)
+      team, // User's chosen team (A or B)
     } = req.body;
 
     const code = generateRoomCode();
-    
+
     let themeId = null;
     if (category) {
       const theme = await Theme.findOne({ where: { title: category } });
@@ -671,8 +720,8 @@ router.post('/create-team', async (req, res) => {
       name: name || `Team Battle`,
       code,
       ownerId: req.user.id,
-      roomType: 'team_vs_team',
-      gameMode: 'team',
+      roomType: "team_vs_team",
+      gameMode: "team",
       language,
       script,
       country,
@@ -685,15 +734,15 @@ router.post('/create-team', async (req, res) => {
       maxPlayers: 8, // 4v4 max for team mode
       isTeamMode: true,
       themeId,
-      status: 'waiting'
+      status: "waiting",
     });
 
     // Owner joins with chosen team
     await RoomParticipant.create({
       roomId: room.id,
       userId: req.user.id,
-      team: team || 'A',
-      isDrawer: false
+      team: team || "A",
+      isDrawer: false,
     });
 
     res.json({
@@ -705,17 +754,17 @@ router.post('/create-team', async (req, res) => {
         roomType: room.roomType,
         category: room.category,
         maxPlayers: room.maxPlayers,
-        participantCount: 1
-      }
+        participantCount: 1,
+      },
     });
   } catch (err) {
-    console.error('Create team room error:', err);
-    res.status(500).json({ error: 'server_error', message: err.message });
+    console.error("Create team room error:", err);
+    res.status(500).json({ error: "server_error", message: err.message });
   }
 });
 
 // LIST PUBLIC ROOMS (for multiplayer lobby) - Protected by global middleware
-router.get('/list', async (req, res) => {
+router.get("/list", async (req, res) => {
   try {
     const {
       language,
@@ -725,15 +774,24 @@ router.get('/list', async (req, res) => {
       category,
       gameMode,
       roomType,
-      voiceEnabled
+      voiceEnabled,
     } = req.query;
 
-    console.log('📋 List rooms request:', { language, script, country, pointsTarget, category, gameMode, roomType, voiceEnabled });
+    console.log("📋 List rooms request:", {
+      language,
+      script,
+      country,
+      pointsTarget,
+      category,
+      gameMode,
+      roomType,
+      voiceEnabled,
+    });
 
     const where = {
       isPublic: true,
-      status: { [Op.in]: ['lobby', 'waiting'] }, // Only show lobby and waiting rooms
-      gameMode: { [Op.in]: ['team', 'team_vs_team'] } // Accept both 'team' and 'team_vs_team' for multiplayer
+      status: { [Op.in]: ["lobby", "waiting"] }, // Only show lobby and waiting rooms
+      gameMode: { [Op.in]: ["team", "team_vs_team"] }, // Accept both 'team' and 'team_vs_team' for multiplayer
     };
 
     if (language) where.language = language;
@@ -743,41 +801,50 @@ router.get('/list', async (req, res) => {
     if (category) where.category = category;
     if (gameMode) where.gameMode = gameMode;
     if (roomType) where.roomType = roomType;
-    if (voiceEnabled !== undefined) where.voiceEnabled = voiceEnabled === 'true';
+    if (voiceEnabled !== undefined)
+      where.voiceEnabled = voiceEnabled === "true";
 
-    console.log('🔍 Searching for rooms with filters:', where);
+    console.log("🔍 Searching for rooms with filters:", where);
 
     const rooms = await Room.findAll({
       where,
       include: [
         {
           model: RoomParticipant,
-          as: 'participants',
+          as: "participants",
           where: { isActive: true },
           required: false,
-          include: [{ model: User, as: 'user', attributes: ['id', 'name', 'avatar'] }]
-        }
+          include: [
+            { model: User, as: "user", attributes: ["id", "name", "avatar"] },
+          ],
+        },
       ],
       limit: 50,
-      order: [['createdAt', 'DESC']]
+      order: [["createdAt", "DESC"]],
     });
 
     console.log(`✅ Found ${rooms.length} rooms matching filters`);
-    rooms.forEach(room => {
-      console.log(`  - Room ${room.id}: ${room.name} | gameMode: ${room.gameMode} | status: ${room.status} | isPublic: ${room.isPublic} | lang: ${room.language} | cat: ${room.category}`);
+    rooms.forEach((room) => {
+      console.log(
+        `  - Room ${room.id}: ${room.name} | gameMode: ${room.gameMode} | status: ${room.status} | isPublic: ${room.isPublic} | lang: ${room.language} | cat: ${room.category}`,
+      );
     });
 
     // Filter out full rooms and map to response format
     const roomList = rooms
-      .filter(room => {
-        const participantCount = room.participants ? room.participants.length : 0;
+      .filter((room) => {
+        const participantCount = room.participants
+          ? room.participants.length
+          : 0;
         const notFull = participantCount < room.maxPlayers;
         if (!notFull) {
-          console.log(`  ⚠️  Filtering out full room ${room.id}: ${participantCount}/${room.maxPlayers}`);
+          console.log(
+            `  ⚠️  Filtering out full room ${room.id}: ${participantCount}/${room.maxPlayers}`,
+          );
         }
         return notFull; // Only include rooms that aren't full
       })
-      .map(room => ({
+      .map((room) => ({
         id: room.id,
         code: room.isPublic ? undefined : room.code, // Only show code for private rooms
         name: room.name,
@@ -791,94 +858,106 @@ router.get('/list', async (req, res) => {
         maxPlayers: room.maxPlayers,
         participantCount: room.participants ? room.participants.length : 0,
         entryPoints: room.entryPoints,
-        gameMode: room.gameMode
+        gameMode: room.gameMode,
       }));
 
-    console.log(`📤 Returning ${roomList.length} rooms after filtering full rooms`);
+    console.log(
+      `📤 Returning ${roomList.length} rooms after filtering full rooms`,
+    );
     res.json({ success: true, rooms: roomList });
   } catch (err) {
-    console.error('List rooms error:', err);
-    res.status(500).json({ error: 'server_error', message: err.message });
+    console.error("List rooms error:", err);
+    res.status(500).json({ error: "server_error", message: err.message });
   }
 });
 
 // GET ROOM DETAILS - Protected by global middleware
-router.get('/:roomId', async (req, res) => {
+router.get("/:roomId", async (req, res) => {
   try {
     const room = await Room.findByPk(req.params.roomId, {
       include: [
         {
           model: User,
-          as: 'owner',
-          attributes: ['id', 'name', 'avatar']
+          as: "owner",
+          attributes: ["id", "name", "avatar"],
         },
         {
           model: RoomParticipant,
-          as: 'participants',
+          as: "participants",
           where: { isActive: true },
           required: false,
-          include: [{ model: User, as: 'user', attributes: ['id', 'name', 'avatar', 'coins'] }]
+          include: [
+            {
+              model: User,
+              as: "user",
+              attributes: ["id", "name", "avatar", "coins"],
+            },
+          ],
         },
         {
           model: Theme,
-          as: 'theme',
-          attributes: ['id', 'title']
-        }
-      ]
+          as: "theme",
+          attributes: ["id", "title"],
+        },
+      ],
     });
 
     if (!room) {
-      return res.status(404).json({ error: 'room_not_found' });
+      return res.status(404).json({ error: "room_not_found" });
     }
-
+    console.log(room.isPublic);
     res.json({ success: true, room });
   } catch (err) {
-    console.error('Get room error:', err);
-    res.status(500).json({ error: 'server_error', message: err.message });
+    console.error("Get room error:", err);
+    res.status(500).json({ error: "server_error", message: err.message });
   }
 });
 
 // LEAVE ROOM - Protected by global middleware
-router.post('/:roomId/leave', async (req, res) => {
+router.post("/:roomId/leave", async (req, res) => {
   try {
     const participant = await RoomParticipant.findOne({
       where: {
         roomId: req.params.roomId,
-        userId: req.user.id
-      }
+        userId: req.user.id,
+      },
     });
 
     if (!participant) {
-      return res.status(404).json({ error: 'not_in_room' });
+      return res.status(404).json({ error: "not_in_room" });
     }
 
     participant.isActive = false;
     await participant.save();
 
-    console.log(`👋 User ${req.user.id} left room ${req.params.roomId} via HTTP`);
+    console.log(
+      `👋 User ${req.user.id} left room ${req.params.roomId} via HTTP`,
+    );
 
     // Check if room is now empty and close it
     const activeParticipants = await RoomParticipant.count({
-      where: { roomId: req.params.roomId, isActive: true }
+      where: { roomId: req.params.roomId, isActive: true },
     });
 
     if (activeParticipants === 0) {
       // No active participants left, close the room
       await Room.update(
-        { status: 'closed' },
-        { where: { id: req.params.roomId } }
+        { status: "closed" },
+        { where: { id: req.params.roomId } },
       );
-      
+
       const room = await Room.findByPk(req.params.roomId);
       if (room) {
-        console.log(`🏠 Room ${req.params.roomId} (${room.name}) closed via HTTP - no active participants`);
+        console.log(
+          `🏠 Room ${req.params.roomId} (${room.name}) closed via HTTP - no active participants`,
+        );
       }
     }
 
-    res.json({ success: true, message: 'left_room' });
+    res.json({ success: true, message: "left_room" });
   } catch (err) {
-    console.error('Leave room error:', err);
-    res.status(500).json({ error: 'server_error', message: err.message });
+    console.error("Leave room error:", err);
+    res.status(500).json({ error: "server_error", message: err.message });
   }
 });
 

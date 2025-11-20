@@ -27,6 +27,8 @@ const {
   startNewRound,
   startDrawingPhase,
   clearRoomTimer,
+  handleDrawerLeave,
+  handleOwnerLeave,
 } = require("./roundPhases");
 const sdpTransform = require("sdp-transform");
 const voiceManager = require("./voiceManager");
@@ -376,8 +378,7 @@ module.exports = function (io) {
           room.maxPlayers = settings.maxPlayers;
 
         await room.save();
-
-        io.to(room.code).emit("settings_updated", {
+        let data = {
           gameMode: room.gameMode,
           language: room.language,
           script: room.script,
@@ -389,9 +390,12 @@ module.exports = function (io) {
           isPublic: room.isPublic,
           maxPlayers: room.maxPlayers,
           status: room.status,
-        });
+        };
+        io.to(room.code).emit("settings_updated", data);
 
-        console.log(`⚙️ Room ${room.id} settings updated`);
+        console.log(
+          `⚙️ Room ${room.id} settings updated  \n${JSON.stringify(data)}`,
+        );
       } catch (e) {
         console.error("Update settings error:", e);
         socket.emit("error", { message: "update_settings_failed" });
@@ -940,7 +944,16 @@ module.exports = function (io) {
       room.currentDrawerId = null;
       room.currentWord = null;
       room.currentWordOptions = null;
-      room.roundPhase = "selecting_drawer";
+
+      const participants = await RoomParticipant.findAll({
+        where: { roomId: room.id, isActive: true },
+        include: [{ model: User, as: "user" }],
+      });
+
+      if (participants.length < 2) {
+        io.to(room.code).emit("error", { message: "not_enough_players" });
+        return;
+      }
       await room.save();
       const { selectDrawerAndStartWordChoice } = require("./roundPhases");
       selectDrawerAndStartWordChoice(io, room);
@@ -988,6 +1001,7 @@ module.exports = function (io) {
           socket.leave(room.code);
 
           if (socket.user) {
+            // 1. Set participant inactive
             await RoomParticipant.update(
               { isActive: false, socketId: null },
               { where: { roomId: room.id, userId: socket.user.id } },
@@ -995,9 +1009,18 @@ module.exports = function (io) {
 
             console.log(`👋 User ${socket.user.name} left room ${room.code}`);
 
+            // 2. CHECK IF LEAVING USER WAS THE DRAWER
+            if (room.ownerId == socket.user.id) {
+              await handleOwnerLeave(io, room, socket.user.id);
+            } else if (room.status === "playing") {
+              await handleDrawerLeave(io, room, socket.user.id);
+            }
+            // END DRAWER CHECK
+
             const roomClosed = await checkAndCloseEmptyRoom(io, room.id);
 
             if (!roomClosed) {
+              // 3. Broadcast updated participant list
               const participants = await RoomParticipant.findAll({
                 where: { roomId: room.id, isActive: true },
                 include: [
@@ -1399,12 +1422,12 @@ async function checkAndCloseEmptyRoom(io, roomId) {
     const room = await Room.findByPk(roomId);
     if (!room) return false;
 
-    if (activeParticipants === 0) {
+    if (activeParticipants === 1) {
       // Set room to inactive instead of finished, so it can be reactivated
       await Room.update({ status: "inactive" }, { where: { id: roomId } });
 
       clearRoomTimer(room.code);
-      io.to(room.code).emit("room_inactive", {
+      io.to(room.code).emit("room_closed", {
         message: "Room is now inactive - no active participants",
       });
       console.log(
