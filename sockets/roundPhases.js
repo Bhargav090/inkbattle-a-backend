@@ -1,6 +1,7 @@
 const { Room, RoomParticipant, User, Word } = require("../models");
 const { PHASE_DURATIONS, checkGameEnd } = require("./gameHelpers");
 const { getWordsForTheme } = require("../utils/wordSelector");
+const { checkAndMaybeDeleteRoom } = require("../utils/cleanRoom");
 
 // Store active timers
 const roomTimers = new Map();
@@ -11,6 +12,64 @@ function clearRoomTimer(key) {
     clearInterval(roomTimers.get(key));
     roomTimers.delete(key);
   }
+}
+
+// === NEW HELPER FUNCTION: Starts a continuous countdown timer for any phase ===
+async function startPhaseTimerAndBroadcast(
+  io,
+  room,
+  phaseKey,
+  duration,
+  onEndCallback,
+) {
+  clearRoomTimer(`${room.code}_phase`);
+  const roomCode = room.code;
+
+  // 1. Initialize remaining time in the database
+  room.roundPhase = phaseKey;
+  room.roundRemainingTime = duration;
+  room.roundPhaseEndTime = new Date(Date.now() + duration * 1000);
+  await room.save();
+
+  // 2. Broadcast initial phase change event
+  io.to(roomCode).emit("phase_change", {
+    phase: phaseKey,
+    duration: duration,
+    // Include other necessary phase-specific data here if needed
+    round: room.currentRound,
+  });
+
+  console.log(`⏱️ Phase started: ${phaseKey}. Duration: ${duration}s`);
+
+  // 3. Start the interval ticker
+  const interval = setInterval(async () => {
+    const refreshedRoom = await Room.findByPk(room.id);
+    if (
+      !refreshedRoom ||
+      refreshedRoom.roundPhase !== phaseKey ||
+      refreshedRoom.roundRemainingTime <= 0
+    ) {
+      clearInterval(interval);
+      clearRoomTimer(`${roomCode}_${phaseKey}`);
+
+      if (refreshedRoom && refreshedRoom.roundPhase === phaseKey) {
+        // If the timer ended naturally, execute the callback (transition to next phase)
+        await onEndCallback(io, refreshedRoom);
+      }
+      return;
+    }
+
+    // Decrement time and save to database
+    refreshedRoom.roundRemainingTime -= 1;
+    await refreshedRoom.save();
+
+    // Broadcast time update to all clients
+    io.to(roomCode).emit("time_update", {
+      remainingTime: refreshedRoom.roundRemainingTime,
+    });
+  }, 1000);
+
+  roomTimers.set(`${roomCode}_${phaseKey}`, interval);
 }
 
 // Start a new round
@@ -36,15 +95,9 @@ async function startNewRound(io, room) {
       { where: { roomId: room.id } },
     );
 
-    // Start selecting drawer phase
-    room.roundPhase = "selecting_drawer";
-    room.roundPhaseEndTime = new Date(
-      Date.now() + PHASE_DURATIONS.selecting_drawer * 1000,
-    );
-    await room.save();
-
     console.log(`🎯 Round ${room.currentRound} - Selecting drawer...`);
 
+    // Start the selection process which now uses the ticking timer
     await selectDrawerAndStartWordChoice(io, room);
   } catch (e) {
     console.error("Start new round error:", e);
@@ -85,6 +138,15 @@ async function selectDrawerAndStartWordChoice(io, room) {
     pointer = (pointer + 1) % participants.length;
 
     // Save pointer + drawer
+    await RoomParticipant.update(
+      { isDrawer: false },
+      { where: { roomId: room.id, isDrawer: true } },
+    ); // Clear old drawer status
+    await RoomParticipant.update(
+      { isDrawer: true },
+      { where: { id: nextDrawer.id } },
+    ); // Set new drawer status
+
     room.drawerPointerIndex = pointer;
     room.currentDrawerId = nextDrawer.userId;
     room.lastDrawerId = nextDrawer.userId;
@@ -98,14 +160,8 @@ async function selectDrawerAndStartWordChoice(io, room) {
     console.log(`👥 Total participants: ${participants.length}`);
     console.log(`🔁 Next pointer index: ${pointer}`);
 
-    // Mark participant as drawer
-    nextDrawer.isDrawer = true;
-    await nextDrawer.save();
-
-    // ---- Word selection logic (unchanged) ----
+    // --- Word selection logic ---
     let words = [];
-    console.log(`${room.language} ${room.script} ${room.themeId}`);
-
     if (room.themeId) {
       try {
         words = await getWordsForTheme(
@@ -118,7 +174,6 @@ async function selectDrawerAndStartWordChoice(io, room) {
         console.log("⚠️ Error loading themed words, fallback being used");
       }
     }
-    console.log(words);
     if (!words || words.length < 3) {
       const fallback = [
         "apple",
@@ -134,12 +189,7 @@ async function selectDrawerAndStartWordChoice(io, room) {
       ];
       words = fallback.sort(() => 0.5 - Math.random()).slice(0, 3);
     }
-
     room.currentWordOptions = words;
-    room.roundPhase = "selecting_drawer";
-    room.roundPhaseEndTime = new Date(
-      Date.now() + PHASE_DURATIONS.selecting_drawer * 1000,
-    );
     await room.save();
 
     const drawerPayload = {
@@ -149,80 +199,83 @@ async function selectDrawerAndStartWordChoice(io, room) {
       avatar: nextDrawer.user?.avatar,
     };
 
+    // ----------------------------------------------------
+    // PHASE 1: selecting_drawer (Preview) - Now uses ticker
+    // ----------------------------------------------------
+    await startPhaseTimerAndBroadcast(
+      io,
+      room,
+      "selecting_drawer",
+      PHASE_DURATIONS.selecting_drawer,
+      async (io, refreshedRoom) => {
+        // Timer ended, transition to choosing_word
+        await startWordChoicePhase(
+          io,
+          refreshedRoom,
+          nextDrawer,
+          words,
+          drawerPayload,
+        );
+      },
+    );
+
     io.to(room.code).emit("drawer_selected", {
       drawer: drawerPayload,
       previewDuration: PHASE_DURATIONS.selecting_drawer,
     });
-
-    io.to(room.code).emit("phase_change", {
-      phase: "selecting_drawer",
-      duration: PHASE_DURATIONS.selecting_drawer,
-      round: room.currentRound,
-      drawer: drawerPayload,
-    });
-
-    // After preview → move to choosing_word
-    const previewTimer = setTimeout(async () => {
-      const refreshedRoom = await Room.findByPk(room.id);
-      if (!refreshedRoom || refreshedRoom.currentDrawerId !== nextDrawer.userId)
-        return;
-
-      refreshedRoom.roundPhase = "choosing_word";
-      refreshedRoom.roundPhaseEndTime = new Date(
-        Date.now() + PHASE_DURATIONS.choosing_word * 1000,
-      );
-      await refreshedRoom.save();
-
-      io.to(room.code).emit("phase_change", {
-        phase: "choosing_word",
-        duration: PHASE_DURATIONS.choosing_word,
-        drawer: drawerPayload,
-      });
-
-      // Send word list to drawer only
-      const drawerSocket = Array.from(io.sockets.sockets.values()).find(
-        (s) => s.user && s.user.id === nextDrawer.userId,
-      );
-      if (drawerSocket) {
-        drawerSocket.emit("word_options", {
-          words,
-          duration: PHASE_DURATIONS.choosing_word,
-        });
-      }
-
-      // If drawer times out → skip → just call this function again → pointer already moved
-      const chooseTimer = setTimeout(async () => {
-        const currentRoom = await Room.findByPk(room.id);
-        if (!currentRoom || currentRoom.currentDrawerId !== nextDrawer.userId)
-          return;
-
-        console.log(`⏰ Drawer ${drawerPayload.name} timed out. Skipping.`);
-
-        // 🔥 BONUS FIX — RESET OLD DRAWER
-        await RoomParticipant.update(
-          { isDrawer: false },
-          { where: { roomId: currentRoom.id, userId: nextDrawer.userId } },
-        );
-
-        currentRoom.currentDrawerId = null;
-        currentRoom.currentWord = null;
-        currentRoom.currentWordOptions = null;
-        currentRoom.roundPhase = "selecting_drawer";
-        await currentRoom.save();
-
-        io.to(room.code).emit("drawer_skipped", { drawer: drawerPayload });
-
-        // Continue rotation
-        await selectDrawerAndStartWordChoice(io, currentRoom);
-      }, PHASE_DURATIONS.choosing_word * 1000);
-
-      roomTimers.set(`${room.code}_phase`, chooseTimer);
-    }, PHASE_DURATIONS.selecting_drawer * 1000);
-
-    roomTimers.set(`${room.code}_phase`, previewTimer);
   } catch (err) {
     console.error("Select drawer error:", err);
   }
+}
+
+// NEW FUNCTION: Handles the word choice phase transition
+async function startWordChoicePhase(
+  io,
+  room,
+  nextDrawer,
+  words,
+  drawerPayload,
+) {
+  const drawerSocket = Array.from(io.sockets.sockets.values()).find(
+    (s) => s.user && s.user.id === nextDrawer.userId,
+  );
+
+  // Send word list to drawer only
+  if (drawerSocket) {
+    drawerSocket.emit("word_options", {
+      words,
+      duration: PHASE_DURATIONS.choosing_word,
+    });
+  }
+
+  // ----------------------------------------------------
+  // PHASE 2: choosing_word - Now uses ticker
+  // ----------------------------------------------------
+  await startPhaseTimerAndBroadcast(
+    io,
+    room,
+    "choosing_word",
+    PHASE_DURATIONS.choosing_word,
+    async (io, currentRoom) => {
+      // Timer ended, drawer timed out (original chooseTimer logic)
+      console.log(`⏰ Drawer ${drawerPayload.name} timed out. Skipping.`);
+
+      await RoomParticipant.update(
+        { isDrawer: false },
+        { where: { roomId: currentRoom.id, userId: nextDrawer.userId } },
+      );
+      currentRoom.currentDrawerId = null;
+      currentRoom.currentWord = null;
+      currentRoom.currentWordOptions = null;
+      currentRoom.roundPhase = "selecting_drawer";
+      await currentRoom.save();
+
+      io.to(room.code).emit("drawer_skipped", { drawer: drawerPayload });
+
+      // Continue rotation
+      await selectDrawerAndStartWordChoice(io, currentRoom);
+    },
+  );
 }
 
 // Start drawing phase
@@ -358,35 +411,33 @@ async function startIntervalPhase(io, room) {
   try {
     room = await Room.findByPk(room.id);
 
-    room.roundPhase = "interval";
-    room.roundPhaseEndTime = new Date(
-      Date.now() + PHASE_DURATIONS.interval * 1000,
+    // ----------------------------------------------------
+    // PHASE 3: interval - Uses the startPhaseTimer pattern
+    // ----------------------------------------------------
+    await startPhaseTimerAndBroadcast(
+      io,
+      room,
+      "interval",
+      PHASE_DURATIONS.interval,
+      async (io, refreshedRoom) => {
+        // Timer ended, transition to new round
+        refreshedRoom.currentRound += 1;
+        await refreshedRoom.save();
+        await startNewRound(io, refreshedRoom);
+      },
     );
-    room.currentWord = null;
-    room.currentWordOptions = null;
-    room.currentDrawerId = null;
-    await room.save();
 
     io.to(room.code).emit("phase_change", {
       phase: "interval",
       duration: PHASE_DURATIONS.interval,
     });
 
-    console.log(`⏸️  Interval phase`);
-
-    // Wait then start next round
-    const timer = setTimeout(async () => {
-      const refreshedRoom = await Room.findByPk(room.id);
-      refreshedRoom.currentRound += 1;
-      await refreshedRoom.save();
-      await startNewRound(io, refreshedRoom);
-    }, PHASE_DURATIONS.interval * 1000);
-
-    roomTimers.set(`${room.code}_phase`, timer);
+    console.log(`⏸️ Interval phase`);
   } catch (e) {
     console.error("Start interval phase error:", e);
   }
 }
+
 async function handleDrawerLeave(io, room, userId) {
   try {
     if (room.currentDrawerId !== userId || room.roundPhase !== "drawing") {
@@ -404,9 +455,6 @@ async function handleDrawerLeave(io, room, userId) {
     room.currentDrawerId = null;
     room.currentWord = null;
     room.currentWordOptions = null;
-    room.roundPhase = "interval"; // Set phase to interval
-
-    // We need to fetch the next phase duration dynamically
 
     // Set interval end time
     room.roundPhaseEndTime = new Date(
@@ -415,26 +463,18 @@ async function handleDrawerLeave(io, room, userId) {
 
     await room.save();
 
-    // 3. Broadcast Phase Change to Interval
-    io.to(room.code).emit("phase_change", {
-      phase: "interval",
-      duration: PHASE_DURATIONS.interval,
-      word: null, // No word to reveal since the drawer bailed
-    });
-
-    // 4. Schedule the start of the next selection phase (startNewRound calls selectDrawerAndStartWordChoice)
-    const { startNewRound } = require("./roundPhases"); // Ensure this is imported/available
-
-    setTimeout(async () => {
-      const refreshedRoom = await Room.findByPk(room.id);
-      if (
-        refreshedRoom &&
-        refreshedRoom.status === "playing" &&
-        refreshedRoom.roundPhase === "interval"
-      ) {
+    // 3. Start the interval phase using the ticking timer
+    await startPhaseTimerAndBroadcast(
+      io,
+      room,
+      "interval",
+      PHASE_DURATIONS.interval,
+      async (io, refreshedRoom) => {
+        // Timer ended, transition to new round
         await startNewRound(io, refreshedRoom);
-      }
-    }, PHASE_DURATIONS.interval * 1000);
+      },
+    );
+    await checkAndMaybeDeleteRoom(io, room.id);
 
     return true; // Drawer leave successfully handled
   } catch (error) {
@@ -444,49 +484,13 @@ async function handleDrawerLeave(io, room, userId) {
 }
 
 async function handleOwnerLeave(io, room, userId) {
-  try {
-    // 1. Check if the leaving user is the owner
-    let roomCode = room.code;
-    if (room.ownerId !== userId) {
-      return false;
-    }
+  if (room.ownerId !== userId) return false;
 
-    console.log(
-      `🚨 Room Owner (${userId}) left room ${roomCode}. Closing room.`,
-    );
+  const { deleteRoom } = require("../utils/cleanRoom");
 
-    // 2. Clear any active round timers
-    clearRoomTimer(`${room.code}_phase`);
-    clearRoomTimer(`${room.code}_drawing`);
-
-    // 3. Set room status to 'closed'
-    room.status = "closed";
-    await room.save();
-
-    // 4. Optionally set all participants in the room to inactive (Crucial cleanup)
-    await RoomParticipant.update(
-      { isActive: false, socketId: null },
-      { where: { roomId: room.id, isActive: true } },
-    );
-
-    // 5. Broadcast room_closed event
-    io.to(room.code).emit("room_closed", {
-      message: "The room owner has left. The game session is closed.",
-      roomCode: room.code,
-    });
-
-    // 6. Force all sockets to leave the room (optional, but good practice)
-    // Note: io.sockets.in(room.code).sockets.forEach(...) might be needed depending on your socket.io version
-    const socketsInRoom = await io.in(room.code).fetchSockets();
-    socketsInRoom.forEach((socket) => {
-      socket.leave(room.code);
-    });
-
-    return true;
-  } catch (error) {
-    console.error("Error handling owner leave:", error);
-    return false;
-  }
+  console.log(`🚨 Owner (${userId}) left room ${room.code}. Deleting room.`);
+  await deleteRoom(io, room);
+  return true;
 }
 module.exports = {
   startNewRound,
@@ -498,4 +502,6 @@ module.exports = {
   roomTimers,
   handleDrawerLeave,
   handleOwnerLeave,
+  startWordChoicePhase, // Exporting new helper function for external use if needed
+  startPhaseTimerAndBroadcast, // Exporting new helper function
 };

@@ -790,14 +790,14 @@ router.get("/list", async (req, res) => {
 
     const where = {
       isPublic: true,
-      status: { [Op.in]: ["lobby", "waiting"] }, // Only show lobby and waiting rooms
-      gameMode: { [Op.in]: ["team", "team_vs_team"] }, // Accept both 'team' and 'team_vs_team' for multiplayer
+      status: { [Op.in]: ["lobby", "waiting"] },
+      gameMode: { [Op.in]: ["team", "team_vs_team"] },
     };
 
     if (language) where.language = language;
     if (script) where.script = script;
     if (country) where.country = country;
-    if (pointsTarget) where.entryPoints = parseInt(pointsTarget); // Use entryPoints column, not pointsTarget
+    if (pointsTarget) where.entryPoints = parseInt(pointsTarget);
     if (category) where.category = category;
     if (gameMode) where.gameMode = gameMode;
     if (roomType) where.roomType = roomType;
@@ -824,29 +824,33 @@ router.get("/list", async (req, res) => {
     });
 
     console.log(`✅ Found ${rooms.length} rooms matching filters`);
-    rooms.forEach((room) => {
-      console.log(
-        `  - Room ${room.id}: ${room.name} | gameMode: ${room.gameMode} | status: ${room.status} | isPublic: ${room.isPublic} | lang: ${room.language} | cat: ${room.category}`,
-      );
-    });
 
-    // Filter out full rooms and map to response format
     const roomList = rooms
       .filter((room) => {
         const participantCount = room.participants
           ? room.participants.length
           : 0;
+
         const notFull = participantCount < room.maxPlayers;
+        const hasPlayers = participantCount > 0; // 👈 ADDED LINE — HIDE EMPTY ROOMS
+
         if (!notFull) {
           console.log(
             `  ⚠️  Filtering out full room ${room.id}: ${participantCount}/${room.maxPlayers}`,
           );
         }
-        return notFull; // Only include rooms that aren't full
+
+        if (!hasPlayers) {
+          console.log(
+            `  🚫 Filtering out empty room ${room.id} (0 participants)`,
+          );
+        }
+
+        return notFull && hasPlayers;
       })
       .map((room) => ({
         id: room.id,
-        code: room.isPublic ? undefined : room.code, // Only show code for private rooms
+        code: room.isPublic ? undefined : room.code,
         name: room.name,
         roomType: room.roomType,
         language: room.language,
@@ -862,8 +866,9 @@ router.get("/list", async (req, res) => {
       }));
 
     console.log(
-      `📤 Returning ${roomList.length} rooms after filtering full rooms`,
+      `📤 Returning ${roomList.length} rooms after hiding empty and full rooms`,
     );
+
     res.json({ success: true, rooms: roomList });
   } catch (err) {
     console.error("List rooms error:", err);

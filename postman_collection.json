@@ -411,6 +411,46 @@
       ]
     },
     {
+      "name": "Words Management",
+      "item": [
+        {
+          "name": "Get Word Schema",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/words/schema",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "words", "schema"]
+            },
+            "description": "Returns available languages, themes, and an example object of how to send payload for /add-words."
+          }
+        },
+        {
+          "name": "Add Words",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"words\": [\n    {\n      \"theme\": \"Animals\",\n      \"English\": \"Lion\",\n      \"Hindi\": \"शेर\",\n      \"Marathi\": \"सिंह\",\n      \"Spanish\": \"León\"\n    },\n    {\n      \"theme\": \"Fruits\",\n      \"English\": \"Apple\",\n      \"Hindi\": \"सेब\",\n      \"Marathi\": \"सफरचंद\",\n      \"Spanish\": \"Manzana\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/words/add-words",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "words", "add-words"]
+            },
+            "description": "Add multilingual words for multiple themes. Automatically maps languages existing in the DB. If no languages exist, only English is used."
+          }
+        }
+      ]
+    },
+    {
       "name": "Themes & Words",
       "item": [
         {

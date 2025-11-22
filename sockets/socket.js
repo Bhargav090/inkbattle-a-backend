@@ -1416,23 +1416,31 @@ module.exports = function (io) {
 async function checkAndCloseEmptyRoom(io, roomId) {
   try {
     const activeParticipants = await RoomParticipant.count({
-      where: { roomId: roomId, isActive: true },
+      where: { roomId, isActive: true },
     });
 
     const room = await Room.findByPk(roomId);
     if (!room) return false;
 
-    if (activeParticipants === 1) {
-      // Set room to inactive instead of finished, so it can be reactivated
+    // 🔒 Do NOT close rooms in lobby state
+    if (room.status === "lobby") {
+      console.log(`🔒 Room ${room.code} is in lobby. Skipping auto-close.`);
+      return false;
+    }
+
+    // ❌ Only close if 0 participants AND not lobby
+    if (activeParticipants === 0) {
+      console.log(
+        `🗑 Closing room ${room.code} (${room.name}) — no participants left`,
+      );
+
       await Room.update({ status: "inactive" }, { where: { id: roomId } });
 
       clearRoomTimer(room.code);
+
       io.to(room.code).emit("room_closed", {
         message: "Room is now inactive - no active participants",
       });
-      console.log(
-        `💤 Room ${roomId} (${room.name}) set to inactive (0 participants)`,
-      );
 
       return true;
     }
