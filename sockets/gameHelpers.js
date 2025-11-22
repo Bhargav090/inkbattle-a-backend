@@ -11,8 +11,9 @@ const PHASE_DURATIONS = {
   selecting_drawer: 5,
   choosing_word: 10,
   drawing: 80,
-  reveal: 4,
+  reveal: 7,
   interval: 4,
+  lobby_timeout: 2 * 60, //2 min
 };
 
 // Calculate entry cost

@@ -41,13 +41,13 @@ router.post("/create", async (req, res) => {
       status: "lobby", // Start in lobby
       isPublic: false, // Default to private
       voiceEnabled: false, // Default voice off
-      entryPoints: 100, // Default entry
+      entryPoints: 250, // Default entry
       targetPoints: 100, // Default target
       maxPlayers: 15,
     });
 
     console.log(
-      `🏠 Room created: ${room.id} (${room.name}) by ${req.user.name} - Code: ${room.code}`,
+      `🏠 Room created: ${room.id} (${room.name}) by ${req.user.name} (${req.user.id}) - Code: ${room.code}`,
     );
 
     // Owner joins automatically (no entry fee yet)
@@ -92,6 +92,7 @@ router.post("/:roomId/update-settings", async (req, res) => {
 
     // Only owner can update settings
     if (room.ownerId !== req.user.id) {
+      console.log(`${room.ownerId} ${room.req.user.id}`);
       return res.status(403).json({ error: "only_owner_can_update" });
     }
 
@@ -725,7 +726,7 @@ router.post("/create-team", async (req, res) => {
       language,
       script,
       country,
-      entryPoints: pointsTarget || 100,
+      entryPoints: pointsTarget || 250,
       targetPoints: pointsTarget || 100,
       category,
       gamePlay,

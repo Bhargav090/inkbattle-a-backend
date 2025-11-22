@@ -15,7 +15,7 @@ module.exports = (sequelize, DataTypes) => {
     category: { type: DataTypes.STRING, allowNull: true }, // Fruits, Animals, Food, Movies (theme)
     
     // Entry and rewards system
-    entryPoints: { type: DataTypes.INTEGER, defaultValue: 100 }, // 100, 250, 500
+    entryPoints: { type: DataTypes.INTEGER, defaultValue: 250 }, // 100, 250, 500
     targetPoints: { type: DataTypes.INTEGER, defaultValue: 100 }, // Points needed to win
     maxPointsPerRound: { type: DataTypes.INTEGER, defaultValue: 10 }, // Max points per round
     

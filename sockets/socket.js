@@ -10,6 +10,7 @@ Features:
 */
 
 const { verify } = require("../utils/auth");
+const { PHASE_DURATIONS } = require("./gameHelpers");
 const {
   Room,
   RoomParticipant,
@@ -32,16 +33,89 @@ const {
 } = require("./roundPhases");
 const sdpTransform = require("sdp-transform");
 const voiceManager = require("./voiceManager");
+const lobbyIdleTimers = new Map();
+// socket.js (Add this function)
 
+async function startLobbyIdleTimer(io, room) {
+  // Only start if the room is still in a pre-game status
+  if (room.status === "lobby" || room.status === "waiting") {
+    clearLobbyIdleTimer(room.id); // Clear any existing timer
+
+    const timer = setTimeout(async () => {
+      const refreshedRoom = await Room.findByPk(room.id);
+      if (!refreshedRoom || refreshedRoom.status === "playing") {
+        lobbyIdleTimers.delete(room.id);
+        return;
+      }
+
+      // Time exceeded! Check if owner is still active.
+      const ownerParticipant = await RoomParticipant.findOne({
+        where: {
+          roomId: refreshedRoom.id,
+          userId: refreshedRoom.ownerId,
+          isActive: true,
+        },
+      });
+
+      if (ownerParticipant && ownerParticipant.socketId) {
+        // Emit event to the owner, asking if they want to continue/exit
+        io.to(ownerParticipant.socketId).emit("lobby_time_exceeded", {
+          roomCode: refreshedRoom.code,
+          message: `You've been waiting for ${(PHASE_DURATIONS.lobby_timeout / 60).toFixed(2)} minutes. Do you want to continue waiting or exit the room?`,
+        });
+        console.log(
+          `🚨 Owner idle timeout exceeded for room ${refreshedRoom.code}. Owner notified.`,
+        );
+      } else {
+        // Owner is no longer active; auto-close the room to clean up.
+        await checkAndCloseEmptyRoom(io, refreshedRoom.id);
+      }
+
+      lobbyIdleTimers.delete(room.id); // Remove timer reference
+    }, PHASE_DURATIONS.lobby_timeout * 1000);
+
+    lobbyIdleTimers.set(room.id, timer);
+    console.log(`⏱️ Lobby idle timer started for room ${room.code}.`);
+  }
+}
+function clearLobbyIdleTimer(roomId) {
+  if (lobbyIdleTimers.has(roomId)) {
+    clearTimeout(lobbyIdleTimers.get(roomId));
+    lobbyIdleTimers.delete(roomId);
+    console.log(`⏱️ Lobby idle timer cleared for room ID: ${roomId}`);
+  }
+}
 module.exports = function (io) {
   // Authentication middleware
   io.use(async (socket, next) => {
-    const token = socket.handshake.auth && socket.handshake.auth.token;
-    if (!token) return next();
-    const payload = verify(token);
-    const user = await User.findByPk(payload.id);
-    if (payload) socket.user = user; // receiving only id
-    next();
+    try {
+      const token = socket.handshake.auth?.token;
+
+      if (!token) {
+        console.log("❌ No token sent");
+        return next();
+      }
+
+      const payload = verify(token); // may throw
+      if (!payload || !payload.id) {
+        console.log("❌ Invalid token payload");
+        return next();
+      }
+
+      const user = await User.findByPk(payload.id);
+      if (!user) {
+        console.log("❌ No user found for token id", payload.id);
+        return next();
+      }
+
+      console.log("✅ Authenticated socket:", user.name);
+
+      socket.user = user;
+      next();
+    } catch (e) {
+      console.log("❌ Token verify failed:", e.message);
+      return next(); // do NOT crash server
+    }
   });
 
   io.on("connection", (socket) => {
@@ -162,6 +236,7 @@ module.exports = function (io) {
           hasPaidEntry: p.hasPaidEntry,
           // The client uses score/team/isDrawer/etc. to resume the state.
         }));
+        await startLobbyIdleTimer(io, room);
         // --------------------------------------------------------------------------
 
         // --- Emit room_joined to the rejoining client, including isResuming flag ---
@@ -477,10 +552,34 @@ module.exports = function (io) {
         socket.emit("error", { message: "select_team_failed" });
       }
     });
+    // socket.js (Add this handler inside io.on("connection", ...))
 
+    socket.on("continue_waiting", async ({ roomId }) => {
+      try {
+        const room = await Room.findByPk(roomId);
+        if (!room) return;
+
+        // Ensure only the owner can reset the timer
+        if (room.ownerId !== socket.user?.id) {
+          return socket.emit("error", {
+            message: "only_owner_can_reset_timer",
+          });
+        }
+        await startLobbyIdleTimer(io, room);
+        // Reset the lobby timeout timer
+        await startLobbyTimeout(io, room);
+
+        console.log(
+          `⏱️ Owner ${socket.user.name} chose to continue waiting. Timer reset for room ${room.code}.`,
+        );
+      } catch (e) {
+        console.error("Continue waiting error:", e);
+      }
+    });
     // START GAME
     socket.on("start_game", async ({ roomCode, roomId }) => {
       try {
+        clearLobbyIdleTimer(room.id); // Game is starting, clear the waiting timer
         console.log(
           `🎮 Start game request from socket ${socket.id}, user: ${socket.user?.id}, roomId: ${roomId}, roomCode: ${roomCode}`,
         );
@@ -1416,31 +1515,23 @@ module.exports = function (io) {
 async function checkAndCloseEmptyRoom(io, roomId) {
   try {
     const activeParticipants = await RoomParticipant.count({
-      where: { roomId, isActive: true },
+      where: { roomId: roomId, isActive: true },
     });
 
     const room = await Room.findByPk(roomId);
     if (!room) return false;
 
-    // 🔒 Do NOT close rooms in lobby state
-    if (room.status === "lobby") {
-      console.log(`🔒 Room ${room.code} is in lobby. Skipping auto-close.`);
-      return false;
-    }
-
-    // ❌ Only close if 0 participants AND not lobby
-    if (activeParticipants === 0) {
-      console.log(
-        `🗑 Closing room ${room.code} (${room.name}) — no participants left`,
-      );
-
+    if (activeParticipants === 1) {
+      // Set room to inactive instead of finished, so it can be reactivated
       await Room.update({ status: "inactive" }, { where: { id: roomId } });
 
       clearRoomTimer(room.code);
-
       io.to(room.code).emit("room_closed", {
         message: "Room is now inactive - no active participants",
       });
+      console.log(
+        `💤 Room ${roomId} (${room.name}) set to inactive (0 participants)`,
+      );
 
       return true;
     }
