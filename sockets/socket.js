@@ -570,7 +570,7 @@ module.exports = function (io) {
         }
         await startLobbyIdleTimer(io, room);
         // Reset the lobby timeout timer
-        await startLobbyTimeout(io, room);
+        // await startLobbyTimeout(io, room);
 
         console.log(
           `⏱️ Owner ${socket.user.name} chose to continue waiting. Timer reset for room ${room.code}.`,
@@ -1525,8 +1525,7 @@ async function checkAndCloseEmptyRoom(io, roomId) {
 
     const room = await Room.findByPk(roomId);
     if (!room) return false;
-
-    if (activeParticipants === 1 && room.status != "lobby") {
+    if (activeParticipants === 1 && room.status === "playing") {
       // Set room to inactive instead of finished, so it can be reactivated
       await Room.update({ status: "inactive" }, { where: { id: roomId } });
 

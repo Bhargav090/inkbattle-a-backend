@@ -794,7 +794,8 @@ router.get("/list", async (req, res) => {
       status: { [Op.in]: ["lobby", "waiting"] },
       gameMode: { [Op.in]: ["team", "team_vs_team"] },
     };
-
+    
+    if (pointsTarget) where.entryPoints = parseInt(pointsTarget);
     if (language) where.language = language;
     if (script) where.script = script;
     if (country) where.country = country;
