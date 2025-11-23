@@ -90,7 +90,7 @@ module.exports = function (io) {
   io.use(async (socket, next) => {
     try {
       const token = socket.handshake.auth?.token;
-
+      console.log(`Receiving Token: ${token}`);
       if (!token) {
         console.log("❌ No token sent");
         return next();
@@ -156,8 +156,10 @@ module.exports = function (io) {
           const activeParticipants = await RoomParticipant.count({
             where: { roomId: room.id, isActive: true },
           });
-
-          if (activeParticipants >= room.maxPlayers) {
+          console.log(
+            `Active participants: ${activeParticipants}--- ${room.maxPlayers}`,
+          );
+          if (activeParticipants > room.maxPlayers) {
             return socket.emit("error", {
               message: "room_full",
               details: `Room is full. Max players: ${room.maxPlayers}`,
@@ -351,6 +353,7 @@ module.exports = function (io) {
         if (!room) return socket.emit("error", { message: "room_not_found" });
 
         // Basic authorization checks
+        console.log(socket.user);
         if (room.ownerId !== socket.user?.id) {
           return socket.emit("error", { message: "only_owner_can_update" });
         }
@@ -579,7 +582,6 @@ module.exports = function (io) {
     // START GAME
     socket.on("start_game", async ({ roomCode, roomId }) => {
       try {
-        clearLobbyIdleTimer(room.id); // Game is starting, clear the waiting timer
         console.log(
           `🎮 Start game request from socket ${socket.id}, user: ${socket.user?.id}, roomId: ${roomId}, roomCode: ${roomCode}`,
         );
@@ -594,6 +596,7 @@ module.exports = function (io) {
           console.log(`❌ Room not found: ${roomId || roomCode}`);
           return socket.emit("error", { message: "room_not_found" });
         }
+        clearLobbyIdleTimer(room.id); // Game is starting, clear the waiting timer
 
         console.log(
           `🏠 Room found: ${room.id}, owner: ${room.ownerId}, current user: ${socket.user?.id}, status: ${room.status}`,
@@ -1150,6 +1153,7 @@ module.exports = function (io) {
       } catch (e) {
         console.error("Leave room error:", e);
       }
+      socket.user = null;
     });
 
     socket.on("join_voice", async ({ roomId, userId }) => {
@@ -1507,6 +1511,7 @@ module.exports = function (io) {
           console.error("Disconnect cleanup error:", e);
         }
       }
+      socket.user = undefined;
     });
   });
 };
@@ -1521,7 +1526,7 @@ async function checkAndCloseEmptyRoom(io, roomId) {
     const room = await Room.findByPk(roomId);
     if (!room) return false;
 
-    if (activeParticipants === 1) {
+    if (activeParticipants === 1 && room.status != "lobby") {
       // Set room to inactive instead of finished, so it can be reactivated
       await Room.update({ status: "inactive" }, { where: { id: roomId } });
 
