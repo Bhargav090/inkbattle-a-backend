@@ -4,5 +4,15 @@ module.exports = (sequelize, DataTypes) => {
     title: { type: DataTypes.STRING, allowNull: false }
   }, { tableName: 'themes' });
 
+  // Define the association inside an associate function
+  Theme.associate = (models) => {
+    // A Theme has many Keywords
+    Theme.hasMany(models.Keyword, {
+      foreignKey: 'themeId', 
+      as: 'keywords', // Crucial alias used in getWordsForTheme: theme.keywords
+      onDelete: 'CASCADE',
+    });
+  };
+
   return Theme;
 };

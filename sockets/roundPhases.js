@@ -1,6 +1,9 @@
 const { Room, RoomParticipant, User, Word } = require("../models");
 const { PHASE_DURATIONS, checkGameEnd } = require("./gameHelpers");
-const { getWordsForTheme } = require("../utils/wordSelector");
+const {
+  getWordsForTheme,
+  getRandomWordForTheme,
+} = require("../utils/wordSelector");
 const { checkAndMaybeDeleteRoom } = require("../utils/cleanRoom");
 
 // Store active timers
@@ -164,7 +167,7 @@ async function selectDrawerAndStartWordChoice(io, room) {
     let words = [];
     if (room.themeId) {
       try {
-        words = await getWordsForTheme(
+        words = await getRandomWordForTheme(
           room.themeId,
           room.language,
           room.script,
@@ -174,6 +177,7 @@ async function selectDrawerAndStartWordChoice(io, room) {
         console.log("⚠️ Error loading themed words, fallback being used");
       }
     }
+    console.log(words);
     if (!words || words.length < 3) {
       const fallback = [
         "apple",
@@ -485,7 +489,7 @@ async function handleDrawerLeave(io, room, userId) {
 
 async function handleOwnerLeave(io, room, userId) {
   if (room.ownerId !== userId) return false;
-
+  console.log(`Owner Left the room`);
   const { deleteRoom } = require("../utils/cleanRoom");
 
   console.log(`🚨 Owner (${userId}) left room ${room.code}. Deleting room.`);

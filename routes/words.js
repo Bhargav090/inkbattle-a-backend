@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
-const { Theme, Language, Word } = require("../models");
-
+// Ensure Keyword, Theme, and Language models are correctly imported
+const { Theme, Language, Keyword, Translation } = require("../models");
 router.post("/add-words", async (req, res) => {
   try {
     const { words } = req.body;
@@ -10,72 +10,67 @@ router.post("/add-words", async (req, res) => {
       return res.status(400).json({ error: "words array required" });
     }
 
-    // Load all languages from DB
+    // Load all languages
     const languages = await Language.findAll();
-
-    // Build map: { English: "en", Hindi: "hi" }
-    const langMap = {};
-    languages.forEach(lang => {
-      langMap[lang.languageName.toLowerCase()] = lang.languageCode;
+    const langCodeToId = {};
+    languages.forEach((l) => {
+      langCodeToId[l.languageCode] = l.id;
     });
 
-    const hasLanguages = Object.keys(langMap).length > 0;
+    const englishId = langCodeToId["en"];
+    if (!englishId)
+      return res.status(500).json({ error: "English not found in DB!" });
 
-    const bulkInsert = [];
-
+    // Insert keywords + translations
     for (const item of words) {
       const { theme } = item;
       if (!theme) continue;
 
-      // Find/create themeId
-      const themeRow = await Theme.findOrCreate({
+      // Find or create theme
+      const [themeRow] = await Theme.findOrCreate({
         where: { title: theme },
-        defaults: { title: theme }
       });
 
-      const themeId = themeRow[0].id;
+      const themeId = themeRow.id;
 
-      // CASE A — Database has languages → use them
-      if (hasLanguages) {
-        for (const key of Object.keys(item)) {
-          if (key === "theme") continue;
+      // Loop over provided languages
+      for (const langName of Object.keys(item)) {
+        if (langName === "theme") continue;
 
-          const langName = key.toLowerCase();
-          const dbLang = langMap[langName]; // languageCode from DB
+        const text = item[langName];
+        if (!text) continue;
 
-          if (!dbLang) continue; // Skip languages not in DB
-          if (!item[key]) continue;
+        // convert "English" => "en"
+        const language = languages.find(
+          (l) => l.languageName.toLowerCase() === langName.toLowerCase(),
+        );
 
-          bulkInsert.push({
-            themeId,
-            languageCode: dbLang,
-            text: item[key]
-          });
-        }
-      } 
-      // CASE B — No languages in database → English only
-      else {
-        if (!item.English) continue;
+        if (!language) continue;
 
-        bulkInsert.push({
+        // 1. Create Keyword entry
+        const keyword = await Keyword.create({
           themeId,
-          languageCode: "en",
-          text: item.English
+          category: theme,
+          keyName: text,
+          languageCode: language.languageCode,
+        });
+
+        // 2. Create Translation entry (roman only)
+        await Translation.create({
+          keywordId: keyword.id,
+          languageId: language.id,
+          scriptType: "roman",
+          translatedText: text,
         });
       }
     }
 
-    // Insert all at once
-    await Word.bulkCreate(bulkInsert);
-
-    res.json({
-      success: true,
-      inserted: bulkInsert.length
-    });
-
+    res.json({ success: true });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Internal Server Error", details: err.message });
+    res
+      .status(500)
+      .json({ error: "Internal Server Error", details: err.message });
   }
 });
 
@@ -83,67 +78,66 @@ router.get("/schema", async (req, res) => {
   try {
     // Fetch all languages
     const languages = await Language.findAll({
-      attributes: ["languageName", "languageCode"]
+      attributes: ["languageName", "languageCode"],
     });
 
     // Fetch all themes
     const themes = await Theme.findAll({
-      attributes: ["title"]
+      attributes: ["title"],
     });
 
-    const languageList = languages.map(l => ({
+    const languageList = languages.map((l) => ({
       name: l.languageName,
-      code: l.languageCode
+      code: l.languageCode,
     }));
 
-    const themeList = themes.map(t => t.title);
+    const themeList = themes.map((t) => t.title);
 
     // Determine primary structure
     const hasLanguages = languageList.length > 0;
 
-    // Build example word object
-    const exampleWord = {
-      theme: themeList.length > 0 ? themeList[0] : "exampleTheme"
+    // Build example keyword object
+    const exampleKeyword = {
+      theme: themeList.length > 0 ? themeList[0] : "exampleTheme",
     };
 
     if (hasLanguages) {
       // Add all languages as keys with placeholder text
-      languageList.forEach(lang => {
-        exampleWord[lang.name] = `<${lang.name} word>`;
+      languageList.forEach((lang) => {
+        exampleKeyword[lang.name] = `<${lang.name} keyword>`;
       });
     } else {
       // Only English required
-      exampleWord["English"] = "<English word>";
+      exampleKeyword["English"] = "<English keyword>";
     }
 
     // Full schema definition
     const schema = {
       description:
-        "Use this schema to send words to /add-words. Each language field is optional unless English-only mode.",
+        "Use this schema to send keywords to /add-words. Each language field is optional unless English-only mode.",
       themeRequired: true,
-      languagesRequired: hasLanguages ? languageList.map(l => l.name) : ["English"],
+      languagesRequired: hasLanguages
+        ? languageList.map((l) => l.name)
+        : ["English"],
       structureExample: {
-        words: [exampleWord]
-      }
+        keywords: [exampleKeyword],
+      },
     };
 
     res.json({
       success: true,
       languages: languageList,
       themes: themeList,
-      schema
+      schema,
     });
-
   } catch (error) {
     console.error(error);
     res.status(500).json({
       success: false,
       error: "Internal Server Error",
-      details: error.message
+      details: error.message,
     });
   }
 });
-
-
 
 module.exports = router;
