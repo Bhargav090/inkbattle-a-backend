@@ -1507,6 +1507,13 @@ module.exports = function (io) {
             );
             await checkAndCloseEmptyRoom(io, room.id);
           }
+          if (socket.user !== null) {
+            if (room.ownerId == socket.user.id) {
+              await handleOwnerLeave(io, room, socket.user.id);
+            } else if (room.status === "playing") {
+              await handleDrawerLeave(io, room, socket.user.id);
+            }
+          }
         } catch (e) {
           console.error("Disconnect cleanup error:", e);
         }
