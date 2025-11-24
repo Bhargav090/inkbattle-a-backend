@@ -115,6 +115,11 @@ async function endGame(io, room, participants) {
       entryCost,
     });
 
+    setTimeout(async () => {
+      room.status = "lobby";
+      await room.save();
+    }, 2000);
+
     console.log(`🎮 Game ended in room ${room.code}`);
   } catch (e) {
     console.error("End game error:", e);
