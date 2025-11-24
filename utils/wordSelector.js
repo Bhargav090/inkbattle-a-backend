@@ -205,7 +205,7 @@ async function getWordsForTheme(themeId, roomLanguage, roomScript, limit = 3) {
 async function getRandomWordForTheme(themeId, roomLanguage, roomScript) {
   try {
     const words = await getWordsForTheme(themeId, roomLanguage, roomScript, 3);
-    return words.length > 0 ? words[0] : null;
+    return words.length > 0 ? words : null;
   } catch (error) {
     console.error("❌ Error in getRandomWordForTheme:", error);
     return null;

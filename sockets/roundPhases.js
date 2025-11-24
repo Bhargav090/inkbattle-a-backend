@@ -171,7 +171,6 @@ async function selectDrawerAndStartWordChoice(io, room) {
           room.themeId,
           room.language,
           room.script,
-          3,
         );
       } catch (e) {
         console.log("⚠️ Error loading themed words, fallback being used");
