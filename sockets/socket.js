@@ -1057,6 +1057,7 @@ module.exports = function (io) {
         return;
       }
       await room.save();
+      io.to(room.code).emit("skip_turn");
       const { selectDrawerAndStartWordChoice } = require("./roundPhases");
       selectDrawerAndStartWordChoice(io, room);
     });
