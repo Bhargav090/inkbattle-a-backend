@@ -1036,31 +1036,84 @@ module.exports = function (io) {
     });
     // Drawer skipped
     socket.on("skip_turn", async ({ roomId }) => {
-      const room = await Room.findByPk(roomId);
-      if (!room) return;
-      await RoomParticipant.update(
-        { isDrawer: false },
-        { where: { roomId: room.id } },
-      );
+      const {selectDrawerAndStartWordChoice}= require("./roundPhases")
+      const MAX_SKIPS = 3;
+  const room = await Room.findByPk(roomId);
+  if (!room) return;
 
-      room.currentDrawerId = null;
-      room.currentWord = null;
-      room.currentWordOptions = null;
+  // 1. Identify the current drawer/skipper using the current socket ID
+  const skipper = await RoomParticipant.findOne({
+    where: { roomId: room.id, socketId: socket.id, isDrawer: true },
+    include: [{ model: User, as: "user" }],
+  });
 
-      const participants = await RoomParticipant.findAll({
-        where: { roomId: room.id, isActive: true },
-        include: [{ model: User, as: "user" }],
-      });
-
-      if (participants.length < 2) {
-        io.to(room.code).emit("error", { message: "not_enough_players" });
-        return;
-      }
-      await room.save();
-      io.to(room.code).emit("skip_turn");
-      const { selectDrawerAndStartWordChoice } = require("./roundPhases");
-      selectDrawerAndStartWordChoice(io, room);
+  if (!skipper) {
+    // This happens if the user is not the drawer or not found
+    socket.emit("error", { message: "not_your_turn_to_skip" });
+    return;
+  }
+  
+  // 2. CHECK SKIP COUNT AND ELIMINATE IF LIMIT EXCEEDED
+  if (skipper.skipCount >= MAX_SKIPS) {
+    console.log(`Player ${skipper.userId} eliminated for exceeding skip limit.`);
+    
+    // Eliminate the player
+    await skipper.update({ isActive: false }); 
+    
+    // 📢 EMIT ELIMINATION SIGNAL 📢
+    io.to(room.code).emit("eliminate_player", {
+        message: `${skipper.user?.name || 'A player'} was eliminated for skipping too many times.`,
+        eliminatedParticipant: {
+            id: skipper.id,
+            userId: skipper.userId,
+            roomId: skipper.roomId,
+            // Include necessary player data for client UI update
+        }
     });
+
+    // Reset drawer state (current drawer is now eliminated)
+    room.currentDrawerId = null; 
+    await room.save();
+    
+    // Attempt to start the next round/drawer selection immediately
+    // Note: The selectDrawerAndStartWordChoice logic should handle the fact that the previous drawer is inactive.
+    return selectDrawerAndStartWordChoice(io, room);
+  }
+
+  // 3. INCREMENT SKIP COUNT (If limit is not exceeded)
+  await skipper.increment('skipCount');
+  await skipper.reload(); // Reload to get the new skipCount value if needed
+
+  // 4. PROCEED WITH TURN SKIP LOGIC
+  
+  // Clear the current drawer state for ALL participants in the room
+  await RoomParticipant.update(
+    { isDrawer: false },
+    { where: { roomId: room.id } },
+  );
+
+  // Clear room state
+  room.currentDrawerId = null;
+  room.currentWord = null;
+  room.currentWordOptions = null;
+  
+  // Check for remaining active participants
+  const participants = await RoomParticipant.findAll({
+    where: { roomId: room.id, isActive: true },
+    include: [{ model: User, as: "user" }],
+  });
+
+  if (participants.length < 2) {
+    io.to(room.code).emit("error", { message: "not_enough_players" });
+    return;
+  }
+  
+  await room.save();
+  io.to(room.code).emit("skip_turn", { nextDrawerId: room.currentDrawerId });
+  
+  // Select the next drawer and start the new round
+  selectDrawerAndStartWordChoice(io, room);
+});
 
     // WORD HINT (from drawer)
     socket.on(
@@ -1479,27 +1532,16 @@ module.exports = function (io) {
     // 7. Handle standard socket disconnect (CRITICAL CLEANUP)
     socket.on("disconnect", async () => {
       console.log("❌ Socket disconnected:", socket.id);
-
-      const { roomId, userId, producerId } = voiceManager.handleDisconnect(
-        socket.id,
-      );
-
-      if (roomId && userId) {
-        // Notify others in the room
-        const otherSockets = voiceManager.getOtherSocketIds(socket.id, roomId);
-        for (const otherSocketId of otherSockets) {
-          io.to(otherSocketId).emit("user_left_voice", { userId });
-          if (producerId) {
-            io.to(otherSocketId).emit("producer_closed", { producerId });
-          }
-        }
-      }
-
+ 
+     const participant = await RoomParticipant.findOne({
+        where:{socketId:socket.id}
+       })
+       
       // 7b. Game Cleanup (RoomParticipant/Room status)
-      if (socket.user && socket.currentRoom) {
+      if (participant) {
         try {
           const room = await Room.findOne({
-            where: { code: socket.currentRoom },
+            where: { id: participant.roomId },
           });
           if (room) {
             await RoomParticipant.update(
@@ -1507,13 +1549,38 @@ module.exports = function (io) {
               { where: { roomId: room.id, userId: socket.user.id } },
             );
             await checkAndCloseEmptyRoom(io, room.id);
-          }
+          
           if (socket.user !== null) {
+             const participants = await RoomParticipant.findAll({
+                where: { roomId: room.id, isActive: true },
+                include: [
+                  {
+                    model: User,
+                    as: "user",
+                    attributes: ["id", "name", "avatar", "coins"],
+                  },
+                ],
+              });
+
+              io.to(room.code).emit("room_participants", {
+                participants: participants.map((p) => ({
+                  id: p.userId,
+                  name: p.user ? p.user.name : "Guest",
+                  avatar: p.user ? p.user.avatar : null,
+                  coins: p.user ? p.user.coins : 0,
+                  score: p.score,
+                  team: p.team,
+                  isDrawer: p.isDrawer,
+                  socketId: p.socketId,
+                  hasPaidEntry: p.hasPaidEntry,
+                })),
+              });
             if (room.ownerId == socket.user.id) {
               await handleOwnerLeave(io, room, socket.user.id);
             } else if (room.status === "playing") {
               await handleDrawerLeave(io, room, socket.user.id);
             }
+          }
           }
         } catch (e) {
           console.error("Disconnect cleanup error:", e);

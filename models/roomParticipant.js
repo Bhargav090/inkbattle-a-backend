@@ -21,7 +21,8 @@ module.exports = (sequelize, DataTypes) => {
     
     // Player status
     isActive: { type: DataTypes.BOOLEAN, defaultValue: true },
-    socketId: { type: DataTypes.STRING, allowNull: true }
+    socketId: { type: DataTypes.STRING, allowNull: true },
+    skipCount: { type: DataTypes.INTEGER, defaultValue: 0 }
   }, { tableName: 'room_participants' });
 
   return RoomParticipant;
