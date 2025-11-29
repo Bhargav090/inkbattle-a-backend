@@ -39,7 +39,7 @@ async function startServer() {
     console.log("Database connection established successfully.");
 
     console.log("Syncing database models...");
-    await sequelize.sync({alter:true});
+    await sequelize.sync();
     console.log("Database models synced successfully.");
 
     // Seed themes and words
