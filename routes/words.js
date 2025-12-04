@@ -174,6 +174,58 @@ router.post("/add-words", async (req, res) => {
 });
  
 
+router.delete("/theme/:themeName", async (req, res) => {
+  try {
+    const { themeName } = req.params;
+    
+    // Find the theme
+    const theme = await Theme.findOne({
+      where: { title: themeName }
+    });
+    
+    if (!theme) {
+      return res.status(404).json({ 
+        success: false, 
+        message: `Theme "${themeName}" not found` 
+      });
+    }
+    
+    // Find all keywords for this theme
+    const keywords = await Keyword.findAll({
+      where: { themeId: theme.id }
+    });
+    
+    const keywordIds = keywords.map(k => k.id);
+    
+    // Delete all translations for these keywords
+    let deletedTranslations = 0;
+    if (keywordIds.length > 0) {
+      deletedTranslations = await Translation.destroy({
+        where: { keywordId: keywordIds }
+      });
+    }
+    
+    // Delete all keywords
+    const deletedKeywords = await Keyword.destroy({
+      where: { themeId: theme.id }
+    });
+    
+    res.json({
+      success: true,
+      message: `Deleted ${deletedKeywords} keywords and ${deletedTranslations} translations for theme "${themeName}"`,
+      deletedKeywords,
+      deletedTranslations
+    });
+  } catch (error) {
+    console.error("Delete theme error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Internal Server Error",
+      details: error.message
+    });
+  }
+});
+
 router.get("/schema", async (req, res) => {
   try {
     // Fetch all languages

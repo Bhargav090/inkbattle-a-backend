@@ -653,11 +653,11 @@ module.exports = function (io) {
           const user = await User.findByPk(participant.userId);
           if (!user) continue;
 
-          // Skip if already paid
-          if (participant.hasPaidEntry) {
-            console.log(`💰 ${user.name} already paid entry fee`);
-            continue;
-          }
+          // // Skip if already paid
+          // if (participant.hasPaidEntry) {
+          //   console.log(`💰 ${user.name} already paid entry fee`);
+          //   continue;
+          // }
 
           if (user.coins < entryCost) {
             return socket.emit("error", {
