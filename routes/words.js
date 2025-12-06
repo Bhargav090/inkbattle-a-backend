@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 // Ensure Keyword, Theme, and Language models are correctly imported
-const { Theme, Language, Keyword, Translation, Word, sequelize } = require("../models");
+const { Theme, Language, Keyword, Translation, Word } = require("../models");
 
 // Helper function to process language and script data
 function getTranslationDetails(langData) {
@@ -249,36 +249,40 @@ router.delete("/word", async (req, res) => {
       });
     }
     
-    // Find the keyword by keyName and themeId
-    const keyword = await Keyword.findOne({
+    // Find ALL keywords with this keyName and themeId (in case there are multiple entries)
+    const keywords = await Keyword.findAll({
       where: {
         keyName: word,
         themeId: themeRow.id
       }
     });
     
-    if (!keyword) {
+    if (!keywords || keywords.length === 0) {
       return res.status(404).json({
         success: false,
         message: `Word "${word}" not found in theme "${theme}"`
       });
     }
     
-    const keywordId = keyword.id;
+    const keywordIds = keywords.map(k => k.id);
     
-    // Delete all translations for this keyword
+    // Delete all translations for these keywords
     const deletedTranslations = await Translation.destroy({
-      where: { keywordId: keywordId }
+      where: { keywordId: keywordIds }
     });
     
-    // Delete the keyword itself
-    await Keyword.destroy({
-      where: { id: keywordId }
+    // Delete all keywords
+    const deletedKeywords = await Keyword.destroy({
+      where: {
+        keyName: word,
+        themeId: themeRow.id
+      }
     });
     
     res.json({
       success: true,
-      message: `Deleted word "${word}" from theme "${theme}" and ${deletedTranslations} translations`,
+      message: `Deleted word "${word}" from theme "${theme}" - ${deletedKeywords} keyword(s) and ${deletedTranslations} translation(s) removed`,
+      deletedKeywords,
       deletedTranslations
     });
   } catch (error) {
@@ -359,21 +363,16 @@ router.get("/schema", async (req, res) => {
 
 router.get("/all", async (req, res) => {
   try {
-    // Try using the Word model first
-    let words = await Word.findAll({
-      attributes: ['id', 'themeId', 'text']
+    const words = await Keyword.findAll({
+      attributes: ['id', 'themeId', 'keyName', 'languageCode', 'category']
     });
-    
-    // If empty, try raw query as fallback
-    if (!words || words.length === 0) {
-      const [results] = await sequelize.query('SELECT id, themeId, text FROM words');
-      words = results;
-    }
     
     const wordsData = words.map(word => ({
       id: word.id,
       themeId: word.themeId,
-      text: word.text
+      keyName: word.keyName,
+      languageCode: word.languageCode,
+      category: word.category
     }));
     
     res.json({
