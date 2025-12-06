@@ -3,7 +3,7 @@ const router = express.Router();
 const { User, CoinTransaction, Language } = require("../models");
 
 // Configurable rewards
-const DAILY_LOGIN_COINS = 100;
+const DAILY_LOGIN_COINS = 1000;
 const AD_REWARD_COINS = 1000;
 
 // Get current user profile (protected by global middleware)
