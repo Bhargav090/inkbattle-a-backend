@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 // Ensure Keyword, Theme, and Language models are correctly imported
-const { Theme, Language, Keyword, Translation } = require("../models");
+const { Theme, Language, Keyword, Translation, Word } = require("../models");
 
 // Helper function to process language and script data
 function getTranslationDetails(langData) {
@@ -226,6 +226,71 @@ router.delete("/theme/:themeName", async (req, res) => {
   }
 });
 
+router.delete("/word", async (req, res) => {
+  try {
+    const { theme, word } = req.body;
+    
+    if (!theme || !word) {
+      return res.status(400).json({
+        success: false,
+        error: "Theme name and word are required in request body"
+      });
+    }
+    
+    // Find the theme
+    const themeRow = await Theme.findOne({
+      where: { title: theme }
+    });
+    
+    if (!themeRow) {
+      return res.status(404).json({
+        success: false,
+        message: `Theme "${theme}" not found`
+      });
+    }
+    
+    // Find the keyword by keyName and themeId
+    const keyword = await Keyword.findOne({
+      where: {
+        keyName: word,
+        themeId: themeRow.id
+      }
+    });
+    
+    if (!keyword) {
+      return res.status(404).json({
+        success: false,
+        message: `Word "${word}" not found in theme "${theme}"`
+      });
+    }
+    
+    const keywordId = keyword.id;
+    
+    // Delete all translations for this keyword
+    const deletedTranslations = await Translation.destroy({
+      where: { keywordId: keywordId }
+    });
+    
+    // Delete the keyword itself
+    await Keyword.destroy({
+      where: { id: keywordId }
+    });
+    
+    res.json({
+      success: true,
+      message: `Deleted word "${word}" from theme "${theme}" and ${deletedTranslations} translations`,
+      deletedTranslations
+    });
+  } catch (error) {
+    console.error("Delete word error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Internal Server Error",
+      details: error.message
+    });
+  }
+});
+
 router.get("/schema", async (req, res) => {
   try {
     // Fetch all languages
@@ -281,6 +346,23 @@ router.get("/schema", async (req, res) => {
       languages: languageList,
       themes: themeList,
       schema,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      error: "Internal Server Error",
+      details: error.message,
+    });
+  }
+});
+
+router.get("/all", async (req, res) => {
+  try {
+    const words = await Word.findAll();
+    res.json({
+      success: true,
+      words: words,
     });
   } catch (error) {
     console.error(error);
