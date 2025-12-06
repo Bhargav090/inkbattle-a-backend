@@ -172,6 +172,177 @@ router.post("/add-words", async (req, res) => {
         });
     }
 });
+
+router.post("/add-words-bulk", async (req, res) => {
+    try {
+        const { words } = req.body;
+
+        if (!Array.isArray(words) || words.length === 0) {
+            return res.status(400).json({ error: "words array required" });
+        }
+
+        // --- PRE-PROCESSING: Load all necessary data ---
+        const languages = await Language.findAll();
+        const langMap = {}; // Map languageName to object
+        languages.forEach((l) => {
+            langMap[l.languageName.toLowerCase()] = l;
+        });
+
+        // The input requires an English translation, which serves as the base "keyName"
+        const englishLang = langMap["english"];
+        if (!englishLang) {
+            return res.status(500).json({ error: "English not found in DB!" });
+        }
+        
+        const successful = [];
+        const failed = [];
+        let processedCount = 0;
+
+        // --- CORE LOGIC: Process each keyword item with error handling ---
+        for (let i = 0; i < words.length; i++) {
+            const item = words[i];
+            try {
+                const { theme } = item;
+                const englishKeywordText = item.english;
+
+                // Validate required fields
+                if (!theme || !englishKeywordText) {
+                    failed.push({
+                        index: i,
+                        word: englishKeywordText || "N/A",
+                        theme: theme || "N/A",
+                        error: "Missing 'theme' or 'english' field"
+                    });
+                    continue;
+                }
+
+                // 1. Find or create Theme
+                const [themeRow] = await Theme.findOrCreate({
+                    where: { title: theme },
+                });
+                const themeId = themeRow.id;
+
+                // 2. Create the BASE Keyword entry (using the English word as the keyName)
+                const [baseKeyword] = await Keyword.findOrCreate({
+                    where: { 
+                        keyName: englishKeywordText, 
+                        languageCode: englishLang.languageCode, 
+                        themeId: themeId 
+                    },
+                    defaults: {
+                        themeId,
+                        category: theme,
+                        keyName: englishKeywordText,
+                        languageCode: englishLang.languageCode,
+                    }
+                });
+                
+                const keywordId = baseKeyword.id;
+                let successfulTranslations = 0;
+                let currentMissingLangs = [];
+
+                // 3. Loop over all available languages in the DB
+                for (const lang of languages) {
+                    const langNameLower = lang.languageName.toLowerCase();
+                    const langData = item[langNameLower];
+                    
+                    // Skip if language data not provided
+                    if (!langData) {
+                        currentMissingLangs.push(lang.languageName);
+                        continue;
+                    }
+                    
+                    const translationDetails = getTranslationDetails(langData);
+                    const { roman, native } = translationDetails;
+
+                    // Process Romanized (Phonetic) Script
+                    if (roman) {
+                        try {
+                            await Translation.findOrCreate({
+                                where: {
+                                    keywordId: keywordId,
+                                    languageId: lang.id,
+                                    scriptType: "roman",
+                                },
+                                defaults: {
+                                    keywordId: keywordId,
+                                    languageId: lang.id,
+                                    scriptType: "roman",
+                                    translatedText: roman,
+                                }
+                            });
+                            successfulTranslations++;
+                        } catch (transErr) {
+                            // Continue even if one translation fails
+                            console.error(`Translation error for ${lang.languageName} (roman):`, transErr.message);
+                        }
+                    }  
+
+                    // Process Native (Default) Script
+                    if (native) {
+                        try {
+                            await Translation.findOrCreate({
+                                where: {
+                                    keywordId: keywordId,
+                                    languageId: lang.id,
+                                    scriptType: "native",
+                                },
+                                defaults: {
+                                    keywordId: keywordId,
+                                    languageId: lang.id,
+                                    scriptType: "native",
+                                    translatedText: native,
+                                }
+                            });
+                            successfulTranslations++;
+                        } catch (transErr) {
+                            // Continue even if one translation fails
+                            console.error(`Translation error for ${lang.languageName} (native):`, transErr.message);
+                        }
+                    }
+                }
+
+                successful.push({
+                    keyword: englishKeywordText,
+                    theme: theme,
+                    translationsCount: successfulTranslations,
+                    missingLanguages: currentMissingLangs.length > 0 ? currentMissingLangs : undefined,
+                });
+
+                processedCount++;
+
+            } catch (itemError) {
+                // Catch individual word errors and continue processing
+                failed.push({
+                    index: i,
+                    word: item.english || "N/A",
+                    theme: item.theme || "N/A",
+                    error: itemError.message || "Unknown error"
+                });
+                console.error(`Error processing word at index ${i}:`, itemError.message);
+            }
+        }
+
+        res.json({ 
+            success: true, 
+            message: `Processed ${processedCount} out of ${words.length} words.`,
+            summary: {
+                total: words.length,
+                successful: successful.length,
+                failed: failed.length
+            },
+            successful: successful,
+            failed: failed.length > 0 ? failed : undefined,
+        });
+
+    } catch (err) {
+        console.error("Bulk insert error:", err);
+        res.status(500).json({ 
+            error: "Internal Server Error", 
+            details: err.message 
+        });
+    }
+});
  
 
 router.delete("/theme/:themeName", async (req, res) => {
@@ -364,7 +535,9 @@ router.get("/schema", async (req, res) => {
 router.get("/all", async (req, res) => {
   try {
     const words = await Keyword.findAll({
-      attributes: ['id', 'themeId', 'keyName', 'languageCode', 'category']
+      attributes: ['id', 'themeId', 'keyName', 'languageCode', 'category'],
+      limit: null, // Explicitly set to null to return ALL records, no pagination
+      order: [['id', 'ASC']]
     });
     
     const wordsData = words.map(word => ({
@@ -378,6 +551,7 @@ router.get("/all", async (req, res) => {
     res.json({
       success: true,
       words: wordsData,
+      count: wordsData.length
     });
   } catch (error) {
     console.error("Error fetching words:", error);
