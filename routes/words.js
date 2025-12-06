@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 // Ensure Keyword, Theme, and Language models are correctly imported
-const { Theme, Language, Keyword, Translation, Word } = require("../models");
+const { Theme, Language, Keyword, Translation, Word, sequelize } = require("../models");
 
 // Helper function to process language and script data
 function getTranslationDetails(langData) {
@@ -359,13 +359,29 @@ router.get("/schema", async (req, res) => {
 
 router.get("/all", async (req, res) => {
   try {
-    const words = await Word.findAll();
+    // Try using the Word model first
+    let words = await Word.findAll({
+      attributes: ['id', 'themeId', 'text']
+    });
+    
+    // If empty, try raw query as fallback
+    if (!words || words.length === 0) {
+      const [results] = await sequelize.query('SELECT id, themeId, text FROM words');
+      words = results;
+    }
+    
+    const wordsData = words.map(word => ({
+      id: word.id,
+      themeId: word.themeId,
+      text: word.text
+    }));
+    
     res.json({
       success: true,
-      words: words,
+      words: wordsData,
     });
   } catch (error) {
-    console.error(error);
+    console.error("Error fetching words:", error);
     res.status(500).json({
       success: false,
       error: "Internal Server Error",
