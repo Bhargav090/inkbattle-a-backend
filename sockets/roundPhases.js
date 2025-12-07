@@ -157,7 +157,7 @@ async function selectDrawerAndStartWordChoice(io, room) {
       const orangeTeam = participants
         .filter((p) => p.team === "orange")
         .sort((a, b) => a.userId - b.userId);
-
+      
       // If teams are not properly formed, fallback to flat logic
       if (!blueTeam.length || !orangeTeam.length) {
         console.log(
@@ -167,72 +167,45 @@ async function selectDrawerAndStartWordChoice(io, room) {
         nextDrawer = participants[pointer];
         pointer = (pointer + 1) % participants.length;
       } else {
+        // Create alternating list: [blue, orange, blue, orange, ...]
+        const alternatingList = [];
         const maxLen = Math.max(blueTeam.length, orangeTeam.length);
-        pointer = pointer % maxLen;
-
-        // Helper: pick first eligible from list starting at pointer,
-        const pickFromTeam = (teamList) => {
-          if (!teamList.length) return null;
-          const n = teamList.length;
-          for (let i = 0; i < n; i++) {
-            const idx = (pointer + i) % n;
-            const p = teamList[idx];
-            if (!drawnUserIds.includes(p.userId)) {
-              return p;
-            }
+        
+        for (let i = 0; i < maxLen; i++) {
+          if (i < blueTeam.length) {
+            alternatingList.push(blueTeam[i]);
           }
-          return null; // all in this team already drew
-        };
-
-        // Determine which team should draw this round: 
-        let preferredTeam = "blue";
-        if (room.lastDrawerId) {
-          const lastDrawer = participants.find(
-            (p) => p.userId === room.lastDrawerId,
-          );
-          if (lastDrawer && lastDrawer.team === "blue") {
-            preferredTeam = "orange";
-          } else if (lastDrawer && lastDrawer.team === "orange") {
-            preferredTeam = "blue";
+          if (i < orangeTeam.length) {
+            alternatingList.push(orangeTeam[i]);
           }
         }
 
+        // Find next eligible drawer from alternating list
         let chosenDrawer = null;
+        const totalPlayers = alternatingList.length;
+        
+        for (let i = 0; i < totalPlayers; i++) {
+          const idx = (pointer + i) % totalPlayers;
+          const candidate = alternatingList[idx];
+          
+          if (!drawnUserIds.includes(candidate.userId)) {
+            chosenDrawer = candidate;
+            pointer = (idx + 1) % totalPlayers;
+            break;
+          }
+        }
 
-        // Try to pick respecting drawnUserIds first
-        let blueCandidate = pickFromTeam(blueTeam);
-        let orangeCandidate = pickFromTeam(orangeTeam);
-
-        // If everyone in both teams has drawn already, reset cycle
-        if (!blueCandidate && !orangeCandidate) {
+        // If everyone has drawn, reset cycle
+        if (!chosenDrawer) {
           console.log(
             "🔄 All players have drawn once. Resetting drawnUserIds cycle.",
           );
           drawnUserIds = [];
-          blueCandidate = pickFromTeam(blueTeam);
-          orangeCandidate = pickFromTeam(orangeTeam);
-        }
-
-        // Now choose team based on preferred, but fall back if that team has no candidate
-        if (preferredTeam === "blue") {
-          chosenDrawer = blueCandidate || orangeCandidate;
-        } else {
-          chosenDrawer = orangeCandidate || blueCandidate;
-        }
-
-        // Extra safety: if still none, fallback to anyone
-        if (!chosenDrawer) {
-          console.log(
-            "⚠️ No eligible drawer found based on teams; falling back to flat rotation.",
-          );
-          pointer = pointer % participants.length;
-          chosenDrawer = participants[pointer];
+          chosenDrawer = alternatingList[pointer];
+          pointer = (pointer + 1) % totalPlayers;
         }
 
         nextDrawer = chosenDrawer;
-
-        // Move pointer once per round, based on max team length
-        pointer = (pointer + 1) % maxLen;
       }
     } 
 
