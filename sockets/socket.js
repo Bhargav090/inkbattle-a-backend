@@ -651,6 +651,7 @@ module.exports = function (io) {
         // Deduct entry coins from all participants
         for (const participant of participants) {
           const user = await User.findByPk(participant.userId);
+          console.log(user)
           if (!user) continue;
 
           // // Skip if already paid

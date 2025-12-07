@@ -127,43 +127,154 @@ async function selectDrawerAndStartWordChoice(io, room) {
       return;
     }
 
-    // Sort participants for a stable rotation order
+    // Sort for stable ordering
     participants.sort((a, b) => a.userId - b.userId);
 
     // Ensure pointer is valid
     let pointer = room.drawerPointerIndex || 0;
-    pointer = pointer % participants.length;
 
-    // Select drawer by pointer
-    const nextDrawer = participants[pointer];
+    // Normalize drawnUserIds (from JSON)
+    let drawnUserIds = Array.isArray(room.drawnUserIds) ? room.drawnUserIds : [];
 
-    // Move pointer to next for next rotation
-    pointer = (pointer + 1) % participants.length;
+    let nextDrawer;
 
-    // Save pointer + drawer
+     
+    // MODE 1: 1v1 
+    
+    if (room.gameMode === "1v1") {
+      pointer = pointer % participants.length;
+      nextDrawer = participants[pointer];
+      pointer = (pointer + 1) % participants.length;
+    } else {
+      
+      // MODE 2: team_vs_team
+      
+
+      const blueTeam = participants
+        .filter((p) => p.team === "blue")
+        .sort((a, b) => a.userId - b.userId);
+
+      const orangeTeam = participants
+        .filter((p) => p.team === "orange")
+        .sort((a, b) => a.userId - b.userId);
+
+      // If teams are not properly formed, fallback to flat logic
+      if (!blueTeam.length || !orangeTeam.length) {
+        console.log(
+          "⚠️ team_vs_team but one of the teams is empty, falling back to flat rotation",
+        );
+        pointer = pointer % participants.length;
+        nextDrawer = participants[pointer];
+        pointer = (pointer + 1) % participants.length;
+      } else {
+        const maxLen = Math.max(blueTeam.length, orangeTeam.length);
+        pointer = pointer % maxLen;
+
+        // Helper: pick first eligible from list starting at pointer,
+        const pickFromTeam = (teamList) => {
+          if (!teamList.length) return null;
+          const n = teamList.length;
+          for (let i = 0; i < n; i++) {
+            const idx = (pointer + i) % n;
+            const p = teamList[idx];
+            if (!drawnUserIds.includes(p.userId)) {
+              return p;
+            }
+          }
+          return null; // all in this team already drew
+        };
+
+        // Determine which team should draw this round: 
+        let preferredTeam = "blue";
+        if (room.lastDrawerId) {
+          const lastDrawer = participants.find(
+            (p) => p.userId === room.lastDrawerId,
+          );
+          if (lastDrawer && lastDrawer.team === "blue") {
+            preferredTeam = "orange";
+          } else if (lastDrawer && lastDrawer.team === "orange") {
+            preferredTeam = "blue";
+          }
+        }
+
+        let chosenDrawer = null;
+
+        // Try to pick respecting drawnUserIds first
+        let blueCandidate = pickFromTeam(blueTeam);
+        let orangeCandidate = pickFromTeam(orangeTeam);
+
+        // If everyone in both teams has drawn already, reset cycle
+        if (!blueCandidate && !orangeCandidate) {
+          console.log(
+            "🔄 All players have drawn once. Resetting drawnUserIds cycle.",
+          );
+          drawnUserIds = [];
+          blueCandidate = pickFromTeam(blueTeam);
+          orangeCandidate = pickFromTeam(orangeTeam);
+        }
+
+        // Now choose team based on preferred, but fall back if that team has no candidate
+        if (preferredTeam === "blue") {
+          chosenDrawer = blueCandidate || orangeCandidate;
+        } else {
+          chosenDrawer = orangeCandidate || blueCandidate;
+        }
+
+        // Extra safety: if still none, fallback to anyone
+        if (!chosenDrawer) {
+          console.log(
+            "⚠️ No eligible drawer found based on teams; falling back to flat rotation.",
+          );
+          pointer = pointer % participants.length;
+          chosenDrawer = participants[pointer];
+        }
+
+        nextDrawer = chosenDrawer;
+
+        // Move pointer once per round, based on max team length
+        pointer = (pointer + 1) % maxLen;
+      }
+    } 
+
+    // Clear old drawer status
     await RoomParticipant.update(
       { isDrawer: false },
       { where: { roomId: room.id, isDrawer: true } },
-    ); // Clear old drawer status
+    );
+
+    // Mark new drawer
     await RoomParticipant.update(
-      { isDrawer: true },
+      { isDrawer: true, hasDrawn: true },
       { where: { id: nextDrawer.id } },
-    ); // Set new drawer status
+    );
+
+    // Keep track of who has drawn in this cycle
+    if (!drawnUserIds.includes(nextDrawer.userId)) {
+      drawnUserIds.push(nextDrawer.userId);
+    }
 
     room.drawerPointerIndex = pointer;
     room.currentDrawerId = nextDrawer.userId;
     room.lastDrawerId = nextDrawer.userId;
     room.currentWord = null;
     room.currentWordOptions = null;
+    room.drawnUserIds = drawnUserIds;
     await room.save();
 
     console.log(
-      `🎯 Drawer selected: ${nextDrawer.user?.name ?? "Guest"} (ID: ${nextDrawer.userId})`,
+      `🎯 Drawer selected: ${nextDrawer.user?.name ?? "Guest"} (ID: ${
+        nextDrawer.userId
+      })`,
     );
     console.log(`👥 Total participants: ${participants.length}`);
     console.log(`🔁 Next pointer index: ${pointer}`);
+    console.log(
+      `📜 Drawn users this cycle: ${
+        drawnUserIds.length ? drawnUserIds.join(", ") : "none"
+      }`,
+    );
 
-    // --- Word selection logic ---
+    // --- Word selection logic (unchanged) ---
     let words = [];
     if (room.themeId) {
       try {
@@ -173,10 +284,10 @@ async function selectDrawerAndStartWordChoice(io, room) {
           room.script,
         );
       } catch (e) {
-        console.log("⚠️ Error loading themed words, fallback being used");
+        console.log("⚠️ Error loading themed words, fallback being used", e);
       }
     }
-    console.log(words);
+
     if (!words || words.length < 3) {
       const fallback = [
         "apple",
@@ -202,16 +313,13 @@ async function selectDrawerAndStartWordChoice(io, room) {
       avatar: nextDrawer.user?.avatar,
     };
 
-    // ----------------------------------------------------
-    // PHASE 1: selecting_drawer (Preview) - Now uses ticker
-    // ----------------------------------------------------
+    // PHASE 1: selecting_drawer
     await startPhaseTimerAndBroadcast(
       io,
       room,
       "selecting_drawer",
       PHASE_DURATIONS.selecting_drawer,
       async (io, refreshedRoom) => {
-        // Timer ended, transition to choosing_word
         await startWordChoicePhase(
           io,
           refreshedRoom,
