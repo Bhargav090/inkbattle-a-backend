@@ -195,13 +195,16 @@ module.exports = function (io) {
               `✅ User ${socket.user.name} RESUMED game in room ${room.code}`,
             );
           } else {
-            // --- NEW PARTICIPANT LOGIC (You may need to insert a new participant here) ---
-            // Assuming participant creation happens elsewhere (e.g., /api/rooms/join),
-            // but if it happens implicitly here, you would add the creation logic.
-            // For now, we only handle updates for existing users who already joined once.
-
-            // If you are sure a user has an active/inactive record when they hit join_room,
-            // this 'else' branch may not be needed, but it guards against missing records.
+            if(room.gameMode!='1v1'){
+    isNewParticipant = true;
+              await RoomParticipant.create({
+                roomId:room.id,
+                userId:socket.user.id,
+                socketId:socket.id,
+                isActive:true,
+                team:'blue'
+              });
+            }else{            
             isNewParticipant = true; // Set flag
             await RoomParticipant.create({
               // Example creation for new player
@@ -211,9 +214,9 @@ module.exports = function (io) {
               isActive: true,
               // Set default scores, team, etc.
             });
+            }
           }
         }
-
         // --- Fetch ALL participants (including the newly resumed/active one) ---
         const participants = await RoomParticipant.findAll({
           where: { roomId: room.id, isActive: true },
