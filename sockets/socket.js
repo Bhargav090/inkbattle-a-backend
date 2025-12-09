@@ -641,7 +641,7 @@ module.exports = function (io) {
             (p) => p.team === "blue",
           ).length;
 
-          if (orangeCount === 0 || blueCount === 0) {
+          if (orangeCount < 2 || blueCount < 2) {
             return socket.emit("error", { message: "both_teams_need_players" });
           }
         }
