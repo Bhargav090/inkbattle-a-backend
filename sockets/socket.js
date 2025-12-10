@@ -455,8 +455,12 @@ module.exports = function (io) {
             room.status = "lobby";
           }
         }
-        if (settings.maxPlayers !== undefined)
+        if (settings.maxPlayers !== undefined) {
+          console.log(
+            `🔵 BACKEND: Updating maxPlayers from ${room.maxPlayers} to ${settings.maxPlayers}`,
+          );
           room.maxPlayers = settings.maxPlayers;
+        }
 
         await room.save();
         let data = {
@@ -472,6 +476,9 @@ module.exports = function (io) {
           maxPlayers: room.maxPlayers,
           status: room.status,
         };
+        console.log(
+          `🟢 BACKEND: Emitting settings_updated to room ${room.code} with maxPlayers: ${data.maxPlayers}`,
+        );
         io.to(room.code).emit("settings_updated", data);
 
         console.log(
@@ -632,7 +639,7 @@ module.exports = function (io) {
           return socket.emit("error", { message: "not_enough_players" });
         }
 
-        // For team mode, check both teams have players
+        // For team mode, check both teams have at least 2 players each
         if (room.gameMode === "team_vs_team") {
           const orangeCount = participants.filter(
             (p) => p.team === "orange",
@@ -641,8 +648,11 @@ module.exports = function (io) {
             (p) => p.team === "blue",
           ).length;
 
-          if (orangeCount === 0 || blueCount === 0) {
-            return socket.emit("error", { message: "both_teams_need_players" });
+          if (orangeCount < 2 || blueCount < 2) {
+            return socket.emit("error", { 
+              message: "both_teams_need_players",
+              details: "Each team needs at least 2 players to start the game"
+            });
           }
         }
 

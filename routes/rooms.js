@@ -43,7 +43,7 @@ router.post("/create", async (req, res) => {
       voiceEnabled: false, // Default voice off
       entryPoints: 250, // Default entry
       targetPoints: 100, // Default target
-      maxPlayers: 15,
+      maxPlayers: 5, // Default to 5 (can be incremented up to 15 in lobby)
     });
 
     console.log(
@@ -658,7 +658,7 @@ router.post("/create-public", async (req, res) => {
       category,
       voiceEnabled,
       isPublic: true,
-      maxPlayers: 15,
+      maxPlayers: 5, // Default to 5 (can be incremented up to 15 in lobby)
       themeId,
       status: "waiting",
     });

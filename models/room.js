@@ -19,7 +19,7 @@ module.exports = (sequelize, DataTypes) => {
     targetPoints: { type: DataTypes.INTEGER, defaultValue: 100 }, // Points needed to win
     maxPointsPerRound: { type: DataTypes.INTEGER, defaultValue: 10 }, // Max points per round
     
-    maxPlayers: { type: DataTypes.INTEGER, defaultValue: 15 },
+    maxPlayers: { type: DataTypes.INTEGER, defaultValue: 5 }, // Default 5, can be incremented up to 15 in lobby
     voiceEnabled: { type: DataTypes.BOOLEAN, defaultValue: false },
     isPublic: { type: DataTypes.BOOLEAN, defaultValue: false }, // Default private
     
