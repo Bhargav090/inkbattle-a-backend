@@ -745,7 +745,10 @@ module.exports = function (io) {
         await room.save();
 
         console.log(`📝 Drawer chose word: ${word}`);
-
+        await RoomParticipant.update(
+  { eliminationCount: 3 },
+  { where: { roomId: room.id, userId: socket.user.id } }
+);
         await startDrawingPhase(io, room);
       } catch (e) {
         console.error("Choose word error:", e);
@@ -817,11 +820,17 @@ module.exports = function (io) {
         let user = { id: null, name: "Guest", avatar: avatar };
         if (userId) {
           const dbUser = await User.findByPk(userId);
+          // Fetch participant to get the team for this specific room
+          const participant = await RoomParticipant.findOne({
+            where: { roomId: room.id, userId: userId },
+          });
+
           if (dbUser) {
             user = {
               id: dbUser.id,
               name: dbUser.name,
               avatar: dbUser.avatar,
+              team: participant ? participant.team : dbUser.team // Prioritize room participant team
             };
           }
         }
@@ -987,6 +996,30 @@ module.exports = function (io) {
             },
             remainingTime: room.roundRemainingTime,
           });
+          const participants = await RoomParticipant.findAll({
+                where: { roomId: room.id, isActive: true },
+                include: [
+                  {
+                    model: User,
+                    as: "user",
+                    attributes: ["id", "name", "avatar", "coins"],
+                  },
+                ],
+              });
+
+              io.to(room.code).emit("room_participants", {
+                participants: participants.map((p) => ({
+                  id: p.userId,
+                  name: p.user ? p.user.name : "Guest",
+                  avatar: p.user ? p.user.avatar : null,
+                  coins: p.user ? p.user.coins : 0,
+                  score: p.score,
+                  team: p.team,
+                  isDrawer: p.isDrawer,
+                  socketId: p.socketId,
+                  hasPaidEntry: p.hasPaidEntry,
+                })),
+              });
 
           // Check if all eligible players guessed
           const eligibleCount =
@@ -1032,6 +1065,8 @@ module.exports = function (io) {
             user: {
               id: socket.user.id,
               name: userName,
+              team: participant.team,
+              avatar: user ? user.avatar : null,
             },
           });
 
@@ -1040,7 +1075,8 @@ module.exports = function (io) {
             ok: false,
             message: "incorrect",
             guess: guess,
-            avatar: user.avatar,
+            avatar: user ? user.avatar : null,
+            team: participant.team,
           });
           // END FIX
         }

@@ -15,7 +15,10 @@ app.use(express.json({ limit: "1mb" }));
 const path = require("path");
 app.use(express.static(path.join(__dirname, "public")));
 
-app.use("/api", routes);
+app.use("/api", routes).use((req, res, next) => {
+  console.log(`req: ${req.method} ${req.url}`);
+  next();
+});
 
 app.get("/", (req, res) => res.json({ ok: true }));
 
@@ -39,7 +42,7 @@ async function startServer() {
     console.log("Database connection established successfully.");
 
     console.log("Syncing database models...");
-    await sequelize.sync();
+    await sequelize.sync({});
     console.log("Database models synced successfully.");
 
     // Seed themes and words

@@ -17,6 +17,36 @@ function clearRoomTimer(key) {
   }
 }
 
+async function removeParticipantFromRoom(io, room, userId) {
+  try {
+    // Mark participant inactive and clear socket id
+    await RoomParticipant.update(
+      { isActive: false, socketId: null },
+      { where: { roomId: room.id, userId } }
+    );
+
+    // Optional: create a record/transaction/log for removal (omitted)
+    const user = await User.findByPk(userId);
+
+    // Broadcast to room that player was removed
+    io.to(room.code).emit("player_removed", {
+      userId,
+      name: user ? user.name : "Guest",
+      reason: "failed_to_choose_word",
+    });
+
+    console.log(`🗑️ Removed user ${userId} from room ${room.code} due to repeated misses`);
+
+    // Check if room should be closed because of no active participants
+    await checkAndCloseEmptyRoom(io, room.id);
+
+    return true;
+  } catch (err) {
+    console.error("Error removing participant:", err);
+    return false;
+  }
+}
+
 // === NEW HELPER FUNCTION: Starts a continuous countdown timer for any phase ===
 async function startPhaseTimerAndBroadcast(
   io,
@@ -341,26 +371,78 @@ async function startWordChoicePhase(
     "choosing_word",
     PHASE_DURATIONS.choosing_word,
     async (io, currentRoom) => {
-      // Timer ended, drawer timed out (original chooseTimer logic)
-      console.log(`⏰ Drawer ${drawerPayload.name} timed out. Skipping.`);
+      try {
+        // Timer ended, drawer timed out
+        console.log(`⏰ Drawer ${drawerPayload.name} timed out. Processing skip.`);
 
-      await RoomParticipant.update(
-        { isDrawer: false },
-        { where: { roomId: currentRoom.id, userId: nextDrawer.userId } },
-      );
-      currentRoom.currentDrawerId = null;
-      currentRoom.currentWord = null;
-      currentRoom.currentWordOptions = null;
-      currentRoom.roundPhase = "selecting_drawer";
-      await currentRoom.save();
+        // Fetch participant fresh
+        const participant = await RoomParticipant.findOne({
+          where: { roomId: currentRoom.id, userId: nextDrawer.userId },
+        });
 
-      io.to(room.code).emit("drawer_skipped", { drawer: drawerPayload });
+        if (!participant) {
+          console.warn("⚠️ Participant not found when handling timeout:", nextDrawer.userId);
+          // Continue rotation anyway
+          await selectDrawerAndStartWordChoice(io, currentRoom);
+          return;
+        }
 
-      // Continue rotation
-      await selectDrawerAndStartWordChoice(io, currentRoom);
+        // Decrement eliminationCount (but not below 0)
+        const newEliminationCount = Math.max(0, (participant.eliminationCount || 0) - 1);
+        await RoomParticipant.update(
+          { eliminationCount: newEliminationCount, isDrawer: false },
+          { where: { id: participant.id } }
+        );
+
+        // Refresh room state
+        const refreshedRoom = await Room.findByPk(currentRoom.id);
+
+        // Inform room a drawer was skipped
+        io.to(refreshedRoom.code).emit("drawer_skipped", {
+          drawer: drawerPayload,
+          remainingEliminations: newEliminationCount,
+        });
+
+        // If eliminationCount reached zero -> remove participant
+        if (newEliminationCount <= 0) {
+          console.log(`❌ Drawer ${drawerPayload.name} reached elimination 0. Removing from room.`);
+
+          const removed = await removeParticipantFromRoom(io, refreshedRoom, participant.userId);
+
+          if (!removed) {
+            console.warn("⚠️ Failed to remove participant cleanly:", participant.userId);
+          }
+
+          // Continue rotation with refreshed room (participant list will not include removed)
+          const afterRemovalRoom = await Room.findByPk(refreshedRoom.id);
+          await selectDrawerAndStartWordChoice(io, afterRemovalRoom);
+          return;
+        }
+
+        // If not removed -> continue rotation, reset drawer state and continue
+        // clear current drawer fields on room and continue rotation
+        refreshedRoom.currentDrawerId = null;
+        refreshedRoom.currentWord = null;
+        refreshedRoom.currentWordOptions = null;
+        refreshedRoom.roundPhase = "selecting_drawer";
+        await refreshedRoom.save();
+
+        // Continue rotation
+        await selectDrawerAndStartWordChoice(io, refreshedRoom);
+      } catch (err) {
+        console.error("Error handling choosing_word timeout:", err);
+        try {
+          // Try to continue rotation even on error
+          const fallbackRoom = await Room.findByPk(room.id);
+          if (fallbackRoom) await selectDrawerAndStartWordChoice(io, fallbackRoom);
+        } catch (e) {
+          console.error("Fallback rotation error:", e);
+        }
+      }
     },
   );
 }
+
 
 // Start drawing phase
 async function startDrawingPhase(io, room) {
@@ -388,7 +470,6 @@ async function startDrawingPhase(io, room) {
     });
 
     console.log(`🎨 Drawing phase started - Word: ${room.currentWord}`);
-
     // Timer that ticks every second
     const interval = setInterval(async () => {
       const refreshedRoom = await Room.findByPk(room.id);
@@ -576,6 +657,40 @@ async function handleOwnerLeave(io, room, userId) {
   await deleteRoom(io, room);
   return true;
 }
+
+
+
+// Check and deactivate empty room
+async function checkAndCloseEmptyRoom(io, roomId) {
+  try {
+    const activeParticipants = await RoomParticipant.count({
+      where: { roomId: roomId, isActive: true },
+    });
+
+    const room = await Room.findByPk(roomId);
+    if (!room) return false;
+    if (activeParticipants === 1 && room.status === "playing") {
+      // Set room to inactive instead of finished, so it can be reactivated
+      await Room.update({ status: "inactive" }, { where: { id: roomId } });
+
+      clearRoomTimer(room.code);
+      io.to(room.code).emit("room_closed", {
+        message: "Room is now inactive - no active participants",
+      });
+      console.log(
+        `💤 Room ${roomId} (${room.name}) set to inactive (0 participants)`,
+      );
+
+      return true;
+    }
+
+    return false;
+  } catch (error) {
+    console.error("Error checking empty room:", error);
+    return false;
+  }
+}
+
 module.exports = {
   startNewRound,
   selectDrawerAndStartWordChoice,

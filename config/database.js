@@ -46,6 +46,6 @@ const sequelize = new Sequelize(
   }
 );
 
-sequelize.sync({ alter: true });
+sequelize.sync({});
 
 module.exports = sequelize;

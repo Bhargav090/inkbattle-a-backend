@@ -19,6 +19,9 @@ module.exports = (sequelize, DataTypes) => {
     // Track entry payment
     hasPaidEntry: { type: DataTypes.BOOLEAN, defaultValue: false },
     
+    //  If I continuously misses my chance,player has to be eliminated  after he miss his 3 chances
+    eliminationCount: { type: DataTypes.INTEGER, defaultValue: 3 },
+
     // Player status
     isActive: { type: DataTypes.BOOLEAN, defaultValue: true },
     socketId: { type: DataTypes.STRING, allowNull: true },
