@@ -46,6 +46,9 @@ const sequelize = new Sequelize(
   }
 );
 
-sequelize.sync({});
+// Sync database schema - alter: true adds missing columns without dropping data
+sequelize.sync({ alter: true }).catch(err => {
+  console.error('Database sync error:', err);
+});
 
 module.exports = sequelize;

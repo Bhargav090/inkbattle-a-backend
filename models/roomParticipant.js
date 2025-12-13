@@ -20,7 +20,11 @@ module.exports = (sequelize, DataTypes) => {
     hasPaidEntry: { type: DataTypes.BOOLEAN, defaultValue: false },
     
     //  If I continuously misses my chance,player has to be eliminated  after he miss his 3 chances
-    eliminationCount: { type: DataTypes.INTEGER, defaultValue: 3 },
+    eliminationCount: { 
+      type: DataTypes.INTEGER, 
+      defaultValue: 3,
+      field: 'elimination_count' // Explicit column name mapping for MySQL
+    },
 
     // Player status
     isActive: { type: DataTypes.BOOLEAN, defaultValue: true },
