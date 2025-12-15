@@ -648,7 +648,7 @@ module.exports = function (io) {
             (p) => p.team === "blue",
           ).length;
 
-          if (orangeCount < 2 || blueCount < 2) {
+          if (orangeCount < 0 || blueCount < 0) {
             return socket.emit("error", { 
               message: "both_teams_need_players",
               details: "Each team needs at least 2 players to start the game"
@@ -1007,19 +1007,6 @@ module.exports = function (io) {
                 ],
               });
 
-              io.to(room.code).emit("room_participants", {
-                participants: participants.map((p) => ({
-                  id: p.userId,
-                  name: p.user ? p.user.name : "Guest",
-                  avatar: p.user ? p.user.avatar : null,
-                  coins: p.user ? p.user.coins : 0,
-                  score: p.score,
-                  team: p.team,
-                  isDrawer: p.isDrawer,
-                  socketId: p.socketId,
-                  hasPaidEntry: p.hasPaidEntry,
-                })),
-              });
 
           // Check if all eligible players guessed
           const eligibleCount =
@@ -1050,6 +1037,19 @@ module.exports = function (io) {
             clearRoomTimer(`${room.code}_drawing`);
             await endDrawingPhase(io, room);
           }
+          io.to(room.code).emit("room_participants", {
+                participants: participants.map((p) => ({
+                  id: p.userId,
+                  name: p.user ? p.user.name : "Guest",
+                  avatar: p.user ? p.user.avatar : null,
+                  coins: p.user ? p.user.coins : 0,
+                  score: p.score,
+                  team: p.team,
+                  isDrawer: p.isDrawer,
+                  socketId: p.socketId,
+                  hasPaidEntry: p.hasPaidEntry,
+                })),
+              });
         } else {
           // --- INCORRECT GUESS LOGIC ---
           // FIX: DO NOT mark hasGuessedThisRound = true here.
