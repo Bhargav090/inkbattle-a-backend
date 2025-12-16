@@ -815,9 +815,8 @@ router.get("/list", async (req, res) => {
           model: RoomParticipant,
           as: "participants",
           where: { isActive: true },
-          required: false,
           include: [
-            { model: User, as: "user", attributes: ["id", "name", "avatar"] },
+            { model: User, as: "user", attributes: ["id", "name", "avatar",] },
           ],
         },
       ],
@@ -863,6 +862,7 @@ router.get("/list", async (req, res) => {
         status: room.status,
         maxPlayers: room.maxPlayers,
         participantCount: room.participants ? room.participants.length : 0,
+        RoomParticipants: room.participants,
         entryPoints: room.entryPoints,
         gameMode: room.gameMode,
       }));

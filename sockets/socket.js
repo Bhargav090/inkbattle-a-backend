@@ -126,7 +126,7 @@ module.exports = function (io) {
     );
 
     // JOIN ROOM
-    socket.on("join_room", async ({ roomCode, roomId }) => {
+    socket.on("join_room", async ({ roomCode, roomId, team }) => {
       try {
         let room;
         if (roomCode) {
@@ -217,6 +217,19 @@ module.exports = function (io) {
             }
           }
         }
+        if (team) {
+  await RoomParticipant.update(
+    { team }, // ✅ values first
+    {
+      where: {
+        userId: socket.user.id,
+        roomId: room.id,
+      },
+    }
+  );
+}
+
+
         // --- Fetch ALL participants (including the newly resumed/active one) ---
         const participants = await RoomParticipant.findAll({
           where: { roomId: room.id, isActive: true },
@@ -228,7 +241,6 @@ module.exports = function (io) {
             },
           ],
         });
-
         const participantList = participants.map((p) => ({
           id: p.userId,
           name: p.user ? p.user.name : "Guest",
